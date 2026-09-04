@@ -1,4 +1,4 @@
-from assay.lint import lint_claude_md
+from gauntlet.lint import lint_claude_md
 
 
 def test_lint_reports_sections_imperatives_and_dead_paths(fake_framework):

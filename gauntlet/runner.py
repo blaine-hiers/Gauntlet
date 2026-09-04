@@ -5,9 +5,9 @@ import subprocess
 import time
 from pathlib import Path
 
-from assay.config import Config, Variant
-from assay.snapshot import copy_tree_tolerant
-from assay.tasks import GoldenTask
+from gauntlet.config import Config, Variant
+from gauntlet.snapshot import copy_tree_tolerant
+from gauntlet.tasks import GoldenTask
 
 
 def find_claude() -> str:

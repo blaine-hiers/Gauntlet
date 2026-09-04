@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from assay.tasks import load_tasks
+from gauntlet.tasks import load_tasks
 
 VALID_TASK = """\
 id: find-alpha-status

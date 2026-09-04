@@ -1,9 +1,9 @@
 import subprocess
 
-from assay.config import Config, Variant
-from assay.runner import execute, prepare_run_dir
-from assay.snapshot import make_snapshot
-from assay.tasks import GoldenTask
+from gauntlet.config import Config, Variant
+from gauntlet.runner import execute, prepare_run_dir
+from gauntlet.snapshot import make_snapshot
+from gauntlet.tasks import GoldenTask
 
 
 def make_task(**overrides):
@@ -60,8 +60,8 @@ def test_execute_builds_command_and_parses_json(tmp_path, monkeypatch):
             cmd, 0, stdout='{"result": "the answer", "total_cost_usd": 0.12}', stderr=""
         )
 
-    monkeypatch.setattr("assay.runner.find_claude", lambda: "claude")
-    monkeypatch.setattr("assay.runner.subprocess.run", fake_run)
+    monkeypatch.setattr("gauntlet.runner.find_claude", lambda: "claude")
+    monkeypatch.setattr("gauntlet.runner.subprocess.run", fake_run)
 
     result = execute(make_task(), Variant("current", None), tmp_path, make_cfg(tmp_path))
 
@@ -90,8 +90,8 @@ def test_execute_survives_non_json_output(tmp_path, monkeypatch):
     def fake_run(cmd, **kwargs):
         return subprocess.CompletedProcess(cmd, 1, stdout="CRASH", stderr="boom")
 
-    monkeypatch.setattr("assay.runner.find_claude", lambda: "claude")
-    monkeypatch.setattr("assay.runner.subprocess.run", fake_run)
+    monkeypatch.setattr("gauntlet.runner.find_claude", lambda: "claude")
+    monkeypatch.setattr("gauntlet.runner.subprocess.run", fake_run)
 
     result = execute(make_task(), Variant("current", None), tmp_path, make_cfg(tmp_path))
     assert result["is_error"] is True
@@ -102,8 +102,8 @@ def test_execute_survives_timeout_with_partial_output(tmp_path, monkeypatch):
     def fake_run(cmd, **kwargs):
         raise subprocess.TimeoutExpired(cmd, 900, output="partial stdout so far")
 
-    monkeypatch.setattr("assay.runner.find_claude", lambda: "claude")
-    monkeypatch.setattr("assay.runner.subprocess.run", fake_run)
+    monkeypatch.setattr("gauntlet.runner.find_claude", lambda: "claude")
+    monkeypatch.setattr("gauntlet.runner.subprocess.run", fake_run)
 
     result = execute(make_task(), Variant("current", None), tmp_path, make_cfg(tmp_path))
     assert result["is_error"] is True
@@ -119,8 +119,8 @@ def test_execute_survives_timeout_with_no_output(tmp_path, monkeypatch):
     def fake_run(cmd, **kwargs):
         raise subprocess.TimeoutExpired(cmd, 900)
 
-    monkeypatch.setattr("assay.runner.find_claude", lambda: "claude")
-    monkeypatch.setattr("assay.runner.subprocess.run", fake_run)
+    monkeypatch.setattr("gauntlet.runner.find_claude", lambda: "claude")
+    monkeypatch.setattr("gauntlet.runner.subprocess.run", fake_run)
 
     result = execute(make_task(), Variant("current", None), tmp_path, make_cfg(tmp_path))
     assert result["is_error"] is True

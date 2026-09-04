@@ -1,5 +1,5 @@
-from assay.lint import SectionReport
-from assay.report import _task_score, build_compare, build_report
+from gauntlet.lint import SectionReport
+from gauntlet.report import _task_score, build_compare, build_report
 
 
 def result(task_id, variant, passes, judge_score):

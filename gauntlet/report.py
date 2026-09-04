@@ -14,7 +14,7 @@ def _task_score(r: dict) -> float:
 
 
 def build_report(results: list[dict], lint_reports: list, run_label: str) -> str:
-    lines = [f"# Assay Report — {run_label}", ""]
+    lines = [f"# Gauntlet Report — {run_label}", ""]
 
     by_variant = defaultdict(list)
     for r in results:
@@ -65,7 +65,7 @@ def _short_model(model: str) -> str:
 
 def build_compare(results: list[dict], run_labels: list[str]) -> str:
     """Cross-model report: every result row must carry a 'model' key."""
-    lines = [f"# Assay Model Comparison — {', '.join(run_labels)}", ""]
+    lines = [f"# Gauntlet Model Comparison — {', '.join(run_labels)}", ""]
 
     models = sorted({r["model"] for r in results})
     by_cell = defaultdict(list)  # (model, variant) -> rows

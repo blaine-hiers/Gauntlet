@@ -11,20 +11,20 @@ from pathlib import Path
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from assay.config import Config, load_config
-from assay.judge import judge_output
-from assay.lint import lint_claude_md
-from assay.report import build_compare, build_report
-from assay.runner import execute, prepare_run_dir
-from assay.scoring import run_checks
-from assay.snapshot import _rmtree_force, load_manifest, make_snapshot
-from assay.tasks import load_tasks
+from gauntlet.config import Config, load_config
+from gauntlet.judge import judge_output
+from gauntlet.lint import lint_claude_md
+from gauntlet.report import build_compare, build_report
+from gauntlet.runner import execute, prepare_run_dir
+from gauntlet.scoring import run_checks
+from gauntlet.snapshot import _rmtree_force, load_manifest, make_snapshot
+from gauntlet.tasks import load_tasks
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def load_project_config() -> Config:
-    return load_config(PROJECT_ROOT / "assay.config.json")
+    return load_config(PROJECT_ROOT / "gauntlet.config.json")
 
 
 def data_root(cfg: Config) -> Path:
@@ -159,7 +159,7 @@ def cmd_report(cfg: Config, label: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="assay")
+    parser = argparse.ArgumentParser(prog="gauntlet")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("snapshot")
     sub.add_parser("lint")

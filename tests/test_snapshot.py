@@ -1,6 +1,6 @@
 import json
 
-from assay.snapshot import load_manifest, make_snapshot
+from gauntlet.snapshot import load_manifest, make_snapshot
 
 
 def test_make_snapshot_copies_excludes_and_manifests(fake_framework, tmp_path):
@@ -28,7 +28,7 @@ def test_make_snapshot_overwrites_previous(fake_framework, tmp_path):
 def test_make_snapshot_skips_unreadable_files(fake_framework, tmp_path, monkeypatch, capsys):
     import shutil as _shutil
 
-    from assay import snapshot as snap
+    from gauntlet import snapshot as snap
 
     real_copy2 = _shutil.copy2
 

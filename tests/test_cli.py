@@ -2,8 +2,8 @@ import json
 import tempfile
 from pathlib import Path
 
-from assay import cli
-from assay.config import Config, Variant
+from gauntlet import cli
+from gauntlet.config import Config, Variant
 
 
 def fake_cfg(fake_framework):
@@ -19,7 +19,7 @@ def fake_cfg(fake_framework):
 
 
 def test_snapshot_lint_run_report_pipeline(fake_framework, tmp_path, monkeypatch, capsys):
-    project_root = tmp_path / "assay-project"
+    project_root = tmp_path / "gauntlet-project"
     tasks_dir = project_root / "tasks"
     tasks_dir.mkdir(parents=True)
     (tasks_dir / "01-find.yaml").write_text(
@@ -58,7 +58,7 @@ def test_snapshot_lint_run_report_pipeline(fake_framework, tmp_path, monkeypatch
 
     assert cli.main(["report", "--label", "test-run"]) == 0
     report_md = project_root / "data" / "runs" / "test-run" / "report.md"
-    assert "Assay Report" in report_md.read_text(encoding="utf-8")
+    assert "Gauntlet Report" in report_md.read_text(encoding="utf-8")
 
     # Test label reuse: re-run with same label and verify no duplicates
     assert cli.main(["run", "--label", "test-run"]) == 0
@@ -78,7 +78,7 @@ def test_snapshot_lint_run_report_pipeline(fake_framework, tmp_path, monkeypatch
 
 
 def test_run_model_override_and_compare(fake_framework, tmp_path, monkeypatch):
-    project_root = tmp_path / "assay-project"
+    project_root = tmp_path / "gauntlet-project"
     tasks_dir = project_root / "tasks"
     tasks_dir.mkdir(parents=True)
     (tasks_dir / "01-find.yaml").write_text(
@@ -118,7 +118,7 @@ def test_run_model_override_and_compare(fake_framework, tmp_path, monkeypatch):
 
 
 def test_compare_missing_label_fails(fake_framework, tmp_path, monkeypatch):
-    project_root = tmp_path / "assay-project"
+    project_root = tmp_path / "gauntlet-project"
     project_root.mkdir(parents=True)
     monkeypatch.setattr(cli, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(cli, "load_project_config", lambda: fake_cfg(fake_framework))
@@ -126,7 +126,7 @@ def test_compare_missing_label_fails(fake_framework, tmp_path, monkeypatch):
 
 
 def test_run_rejects_unknown_variant(fake_framework, tmp_path, monkeypatch):
-    project_root = tmp_path / "assay-project"
+    project_root = tmp_path / "gauntlet-project"
     tasks_dir = project_root / "tasks"
     tasks_dir.mkdir(parents=True)
     (tasks_dir / "01-find.yaml").write_text(

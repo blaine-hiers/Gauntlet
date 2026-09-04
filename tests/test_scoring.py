@@ -1,5 +1,5 @@
-from assay.scoring import run_checks
-from assay.snapshot import make_snapshot
+from gauntlet.scoring import run_checks
+from gauntlet.snapshot import make_snapshot
 
 
 def test_run_checks_all_types(fake_framework, tmp_path):

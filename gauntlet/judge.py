@@ -2,7 +2,7 @@ import json
 import re
 import subprocess
 
-from assay.runner import find_claude
+from gauntlet.runner import find_claude
 
 JUDGE_PROMPT = """You are grading an AI assistant's output against a rubric. Grade the outcome \
 quality, not obedience: an output that follows instructions but is unhelpful or wrong scores low.

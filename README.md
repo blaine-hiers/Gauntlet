@@ -1,10 +1,10 @@
-# Assay
+# Gauntlet
 
 A benchmark harness for context engineering. It answers one question:
 
 > **Is this CLAUDE.md helping or hurting the model?**
 
-Assay A/B-tests golden tasks against a frozen snapshot of a knowledge base
+Gauntlet A/B-tests golden tasks against a frozen snapshot of a knowledge base
 under multiple CLAUDE.md variants, then reports which sections earn their
 tokens. It grades on **outcome quality**, not on obedience: a task passes
 because the model produced the right result, not because it followed a
@@ -16,7 +16,7 @@ clone with no setup beyond installing dependencies.
 ## Why it exists
 
 Context files accumulate. Sections get added after a bad answer and never
-removed, and nobody can say which ones are still doing work. Assay makes that
+removed, and nobody can say which ones are still doing work. Gauntlet makes that
 measurable: freeze the corpus, swap the context file, run the same tasks, and
 compare.
 
@@ -26,17 +26,17 @@ compare.
 pip install -r requirements.txt
 ```
 
-`assay.config.json` ships pointed at the bundled `corpus/`, so the commands
+`gauntlet.config.json` ships pointed at the bundled `corpus/`, so the commands
 below work immediately. Point `synced_root` at your own knowledge base when
 you want real numbers.
 
 ## Usage
 
 ```bash
-python -m assay.cli snapshot                  # freeze the corpus into data/snapshot
-python -m assay.cli lint                      # static findings on the snapshot's CLAUDE.md
-python -m assay.cli run --label baseline      # run every task against every variant
-python -m assay.cli report --label baseline   # scored markdown report
+python -m gauntlet.cli snapshot                  # freeze the corpus into data/snapshot
+python -m gauntlet.cli lint                      # static findings on the snapshot's CLAUDE.md
+python -m gauntlet.cli run --label baseline      # run every task against every variant
+python -m gauntlet.cli report --label baseline   # scored markdown report
 ```
 
 Run it again under a new label whenever a new model ships or the context file
@@ -98,7 +98,7 @@ wrong by accident.
 ## Layout
 
 ```
-assay/          harness: cli, snapshot, runner, judge, scoring, lint, report
+gauntlet/          harness: cli, snapshot, runner, judge, scoring, lint, report
 tasks/          golden tasks, plus examples/ skeletons per category
 corpus/         the bundled demo knowledge base under test
 variants/       CLAUDE.md replacements for A/B runs

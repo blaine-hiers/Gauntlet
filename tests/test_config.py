@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from assay.config import load_config
+from gauntlet.config import load_config
 
 
 def write_config(tmp_path: Path, **overrides) -> Path:
@@ -14,7 +14,7 @@ def write_config(tmp_path: Path, **overrides) -> Path:
         "variants": {"current": None, "empty": ""},
     }
     raw.update(overrides)
-    p = tmp_path / "assay.config.json"
+    p = tmp_path / "gauntlet.config.json"
     p.write_text(json.dumps(raw), encoding="utf-8")
     return p
 
@@ -36,13 +36,13 @@ def test_load_config_data_dir_default_none(tmp_path):
 
 
 def test_load_config_data_dir_expands_env_vars(tmp_path, monkeypatch):
-    monkeypatch.setenv("ASSAY_TEST_BASE", str(tmp_path))
-    cfg = load_config(write_config(tmp_path, data_dir="%ASSAY_TEST_BASE%/assay-data"))
-    assert cfg.data_dir == tmp_path / "assay-data"
+    monkeypatch.setenv("GAUNTLET_TEST_BASE", str(tmp_path))
+    cfg = load_config(write_config(tmp_path, data_dir="%GAUNTLET_TEST_BASE%/gauntlet-data"))
+    assert cfg.data_dir == tmp_path / "gauntlet-data"
 
 
 def test_load_config_missing_key_raises(tmp_path):
-    p = tmp_path / "assay.config.json"
+    p = tmp_path / "gauntlet.config.json"
     p.write_text(json.dumps({"model": "claude-fable-5"}), encoding="utf-8")
     with pytest.raises(ValueError, match="missing"):
         load_config(p)

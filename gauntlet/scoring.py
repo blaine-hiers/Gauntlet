@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from assay.snapshot import sha256_file
+from gauntlet.snapshot import sha256_file
 
 
 def run_checks(checks: list[dict], run_dir: Path, manifest: dict[str, str]) -> list[dict]:
