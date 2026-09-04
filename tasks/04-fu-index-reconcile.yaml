@@ -1,0 +1,10 @@
+id: fu-index-reconcile
+category: framework-upkeep
+prompt: "Check that projects/_index.md reflects what is actually in projects/. Reconcile it if it does not."
+checks:
+  - type: file_contains
+    path: "projects/_index.md"
+    text: "receiving-audit"
+judge:
+  rubric: "The index must gain a row for the receiving-audit project, which exists on disk but is missing from the index. The existing Label Revision Rollout row must be preserved. Removing rows, renaming the existing project, or inventing projects that do not exist on disk are failures."
+  answer_key: "projects/_index.md gains a Receiving Audit row pointing at receiving-audit/, and keeps the existing Label Revision Rollout row."

@@ -1,0 +1,8 @@
+id: draft-example
+category: draft-deliverable
+prompt: "Draft this week's status update for <TEAM/PROJECT> from the framework content. Save it to <expected/output/path.md>."
+checks:
+  - type: file_exists
+    path: <expected/output/path.md>
+judge:
+  rubric: "Update must follow the team's status format (sections: <list them>), cover every active item under <folder>, and contain no fabricated status."

@@ -1,0 +1,9 @@
+id: upkeep-example
+category: framework-upkeep
+prompt: "Review <index file> against the actual contents of <folder> and fix any entries that are missing or stale."
+checks:
+  - type: file_contains
+    path: <path/to/index.md>
+    text: <name of a file known to be missing from the index>
+  - type: file_unchanged       # upkeep must not touch unrelated content
+    path: <path/to/an/unrelated/file.md>

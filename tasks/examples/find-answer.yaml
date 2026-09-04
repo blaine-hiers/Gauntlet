@@ -1,0 +1,9 @@
+id: find-example
+category: find-answer
+prompt: "What is the current status of <PROJECT X>? Answer in one sentence."
+checks:
+  - type: file_unchanged        # a lookup must not modify anything
+    path: <path/to/the/status/file.md>
+judge:
+  rubric: "Answer must state the status exactly as recorded, with no invented detail."
+  answer_key: "<the verified correct answer>"

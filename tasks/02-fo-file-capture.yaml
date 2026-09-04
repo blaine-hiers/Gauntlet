@@ -1,0 +1,9 @@
+id: fo-file-capture
+category: file-organize
+prompt: "There is an unfiled capture in inbox/. File it where it belongs, following the rules in CLAUDE.md."
+checks:
+  - type: file_not_exists       # filing means moving, not copying
+    path: "inbox/CAPTURE - Customer complaint from voicemail.md"
+judge:
+  rubric: "The capture must have been MOVED into projects/label-revision/ (the project it concerns), not copied, not deleted, and not left in inbox/. Filing it anywhere else in projects/ is a partial pass. Deleting it outright is a zero."
+  answer_key: "The capture moves from inbox/ into projects/label-revision/, leaving inbox/ empty."

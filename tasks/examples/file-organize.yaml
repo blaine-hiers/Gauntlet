@@ -1,0 +1,14 @@
+id: file-example
+category: file-organize
+prompt: "A new document has arrived in _intake/. File it where it belongs per the framework rules and update the relevant index."
+setup:
+  - copy: seed/<sample-document.pdf>
+    to: _intake/<sample-document.pdf>
+checks:
+  - type: file_exists
+    path: <Correct/Destination/sample-document.pdf>
+  - type: file_not_exists
+    path: _intake/<sample-document.pdf>
+  - type: file_contains
+    path: <path/to/index.md>
+    text: <sample-document>

@@ -1,0 +1,12 @@
+id: dd-priority-summary
+category: draft-deliverable
+prompt: "Draft a one-page priority cheat sheet for the support team at reference/CHEATSHEET - Priorities.md. It should let a new technician set priority correctly without opening anything else."
+checks:
+  - type: file_exists
+    path: "reference/CHEATSHEET - Priorities.md"
+  - type: file_contains
+    path: "reference/CHEATSHEET - Priorities.md"
+    text: "P1"
+judge:
+  rubric: "The cheat sheet must cover all four priorities with their correct first-response times (P1 15 minutes, P2 1 hour, P3 1 business day, P4 5 business days) and must state that priority is set by impact rather than by who is asking. Invented priorities, wrong response times, or an omitted level are failures."
+  answer_key: "P1 15 min (site cannot ship), P2 1 hour (team blocked, workaround exists), P3 1 business day (one person affected), P4 5 business days (request). Priority is set by impact, not by requester."
