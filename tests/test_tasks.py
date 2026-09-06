@@ -110,3 +110,45 @@ def test_load_tasks_rejects_duplicate_ids(tmp_path: Path):
     (tmp_path / "02-b.yaml").write_text(VALID_TASK, encoding="utf-8")
     with pytest.raises(ValueError, match="duplicate"):
         load_tasks(tmp_path)
+
+
+def test_load_tasks_accepts_snapshot_unchanged_without_path(tmp_path: Path):
+    text = """\
+id: t
+category: framework-upkeep
+prompt: "Do nothing"
+checks:
+  - type: snapshot_unchanged
+    allow: ["CLAUDE.md"]
+"""
+    (tmp_path / "ok.yaml").write_text(text, encoding="utf-8")
+    tasks = load_tasks(tmp_path)
+    assert tasks[0].checks[0]["type"] == "snapshot_unchanged"
+
+
+def test_load_tasks_rejects_file_not_contains_without_text(tmp_path: Path):
+    text = """\
+id: t
+category: find-answer
+prompt: "Test"
+checks:
+  - type: file_not_contains
+    path: "$response"
+"""
+    (tmp_path / "bad.yaml").write_text(text, encoding="utf-8")
+    with pytest.raises(ValueError, match="text"):
+        load_tasks(tmp_path)
+
+
+def test_load_tasks_rejects_file_matches_without_pattern(tmp_path: Path):
+    text = """\
+id: t
+category: find-answer
+prompt: "Test"
+checks:
+  - type: file_matches
+    path: "f.txt"
+"""
+    (tmp_path / "bad.yaml").write_text(text, encoding="utf-8")
+    with pytest.raises(ValueError, match="pattern"):
+        load_tasks(tmp_path)

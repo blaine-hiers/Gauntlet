@@ -59,9 +59,13 @@ python -m gauntlet.cli run --label baseline --repeats 5
 
 Each golden task carries two independent gates, and both are reported:
 
-- **Deterministic checks** on the filesystem after the run: `file_exists`,
-  `file_not_exists`, `file_contains`, `file_unchanged`. These cannot be argued
-  with. `file_unchanged` is how a read-only task proves it stayed read-only.
+- **Deterministic checks** on the filesystem (and, via `path: "$response"`, on
+  the model's own answer) after the run: `file_exists`, `file_not_exists`,
+  `file_contains`, `file_not_contains`, `file_matches`, `file_unchanged`,
+  `snapshot_unchanged`. These cannot be argued with. `file_unchanged` proves one
+  path stayed read-only; `snapshot_unchanged` proves the *whole run dir* did,
+  reporting exactly which paths drifted otherwise. See `tasks/README.md` for
+  the full list.
 - **An LLM judge**, given a rubric and an answer key, scoring 0 to 10. The
   rubric names the specific traps, so a plausible-sounding wrong answer scores
   badly rather than passing on tone.
