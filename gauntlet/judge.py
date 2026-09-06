@@ -22,7 +22,11 @@ Respond with ONLY a JSON object: {{"score": <integer 0-10>, "reasoning": "<one s
 def _call_once(prompt: str, judge_model: str, timeout_s: int) -> dict:
     """One subprocess call to the judge, parsed. `score` is None on any
     failure (timeout, non-JSON CLI payload, unparseable reply, out-of-range
-    score) — the caller decides whether that is worth a retry."""
+    score). `retryable` tells the caller whether that failure is worth a
+    retry: only "the CLI ran and returned text we could not parse" is — a
+    timeout already cost a full `timeout_s` once and retrying it would cost
+    that again, and an in-range-but-invalid score is a real (if unusable)
+    answer, not a parse failure."""
     try:
         proc = subprocess.run(
             [find_claude(), "-p", prompt, "--output-format", "json", "--model", judge_model],
@@ -33,7 +37,13 @@ def _call_once(prompt: str, judge_model: str, timeout_s: int) -> dict:
             timeout=timeout_s,
         )
     except subprocess.TimeoutExpired:
-        return {"score": None, "reasoning": "judge timed out", "cost_usd": None, "raw_reply": ""}
+        return {
+            "score": None,
+            "reasoning": "judge timed out",
+            "cost_usd": None,
+            "raw_reply": "",
+            "retryable": False,
+        }
     try:
         cli_payload = json.loads(proc.stdout)
         result_text = cli_payload.get("result", "")
@@ -48,6 +58,7 @@ def _call_once(prompt: str, judge_model: str, timeout_s: int) -> dict:
             "reasoning": f"unparseable judge reply: {result_text[:200]}",
             "cost_usd": cost_usd,
             "raw_reply": result_text,
+            "retryable": True,
         }
     try:
         parsed = json.loads(m.group(0))
@@ -57,6 +68,7 @@ def _call_once(prompt: str, judge_model: str, timeout_s: int) -> dict:
             "reasoning": f"unparseable judge reply: {result_text[:200]}",
             "cost_usd": cost_usd,
             "raw_reply": result_text,
+            "retryable": True,
         }
     score = parsed.get("score")
     reasoning = parsed.get("reasoning", "")
@@ -66,8 +78,15 @@ def _call_once(prompt: str, judge_model: str, timeout_s: int) -> dict:
             "reasoning": f"invalid judge score: {score!r}",
             "cost_usd": cost_usd,
             "raw_reply": result_text,
+            "retryable": False,
         }
-    return {"score": score, "reasoning": reasoning, "cost_usd": cost_usd, "raw_reply": result_text}
+    return {
+        "score": score,
+        "reasoning": reasoning,
+        "cost_usd": cost_usd,
+        "raw_reply": result_text,
+        "retryable": False,
+    }
 
 
 def judge_output(
@@ -97,8 +116,8 @@ def judge_output(
     attempts = []
     for _ in range(max(1, samples)):
         r = _call_once(prompt, judge_model, timeout_s)
-        if r["score"] is None:
-            r = _call_once(prompt, judge_model, timeout_s)  # retry once on unparseable/invalid
+        if r["score"] is None and r["retryable"]:
+            r = _call_once(prompt, judge_model, timeout_s)  # retry once, unparseable output only
         attempts.append(r)
 
     total_cost = sum(a["cost_usd"] or 0 for a in attempts)

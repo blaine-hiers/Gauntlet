@@ -62,6 +62,62 @@ def test_judge_handles_garbage_reply(monkeypatch):
     assert verdict["degraded"] is True
 
 
+def test_judge_retries_exactly_once_on_unparseable_output(monkeypatch):
+    # Review finding: retry must fire for "CLI ran, reply unparseable" — this
+    # pins the call count so a regression back to "retry on any None score"
+    # (which would also retry a timeout) is caught even if it doesn't change
+    # the returned score.
+    captured_prompt.clear()
+    call_count = {"n": 0}
+
+    def fake_run(cmd, **kwargs):
+        call_count["n"] += 1
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout=json.dumps({"result": "not json at all"}), stderr=""
+        )
+
+    monkeypatch.setattr("gauntlet.judge.find_claude", lambda: "claude")
+    monkeypatch.setattr("gauntlet.judge.subprocess.run", fake_run)
+    judge_output("whatever", {"rubric": "r"}, "claude-fable-5")
+    assert call_count["n"] == 2
+
+
+def test_judge_does_not_retry_on_timeout(monkeypatch):
+    # Review finding: retrying a timeout doubles the cost of every judge
+    # timeout (2 x timeout_s) for no benefit — a timeout is not a parse failure.
+    call_count = {"n": 0}
+
+    def fake_run(cmd, **kwargs):
+        call_count["n"] += 1
+        raise subprocess.TimeoutExpired(cmd, 300)
+
+    monkeypatch.setattr("gauntlet.judge.find_claude", lambda: "claude")
+    monkeypatch.setattr("gauntlet.judge.subprocess.run", fake_run)
+    verdict = judge_output("whatever", {"rubric": "r"}, "claude-fable-5")
+    assert call_count["n"] == 1
+    assert verdict["score"] is None
+    assert "timed out" in verdict["reasoning"]
+
+
+def test_judge_does_not_retry_on_invalid_score(monkeypatch):
+    # An out-of-range score is a real (if unusable) reply, not a parse
+    # failure — parseable-but-invalid should not cost a second call either.
+    call_count = {"n": 0}
+
+    def fake_run(cmd, **kwargs):
+        call_count["n"] += 1
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout=json.dumps({"result": '{"score": 99, "reasoning": "way too high"}'}),
+            stderr="",
+        )
+
+    monkeypatch.setattr("gauntlet.judge.find_claude", lambda: "claude")
+    monkeypatch.setattr("gauntlet.judge.subprocess.run", fake_run)
+    verdict = judge_output("whatever", {"rubric": "r"}, "claude-fable-5")
+    assert call_count["n"] == 1
+    assert verdict["score"] is None
+
+
 def test_judge_retries_once_then_succeeds(monkeypatch):
     captured_prompt.clear()
     monkeypatch.setattr("gauntlet.judge.find_claude", lambda: "claude")
