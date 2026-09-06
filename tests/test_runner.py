@@ -94,7 +94,13 @@ def test_execute_builds_command_and_parses_json(tmp_path, monkeypatch):
         captured["cmd"] = cmd
         captured["kwargs"] = kwargs
         return subprocess.CompletedProcess(
-            cmd, 0, stdout='{"result": "the answer", "total_cost_usd": 0.12}', stderr=""
+            cmd,
+            0,
+            stdout=(
+                '{"result": "the answer", "total_cost_usd": 0.12, "num_turns": 4, '
+                '"usage": {"input_tokens": 100, "output_tokens": 50}}'
+            ),
+            stderr="",
         )
 
     monkeypatch.setattr("gauntlet.runner.find_claude", lambda: "claude")
@@ -122,6 +128,8 @@ def test_execute_builds_command_and_parses_json(tmp_path, monkeypatch):
     # Assert result parsing
     assert result["output_text"] == "the answer"
     assert result["cost_usd"] == 0.12
+    assert result["num_turns"] == 4
+    assert result["usage"] == {"input_tokens": 100, "output_tokens": 50}
     assert result["is_error"] is False
     assert result["model"] == "claude-fable-5"
 
@@ -136,6 +144,7 @@ def test_execute_survives_non_json_output(tmp_path, monkeypatch):
     result = execute(make_task(), Variant("current", None), tmp_path, make_cfg(tmp_path))
     assert result["is_error"] is True
     assert result["output_text"] == "CRASH"
+    assert result["num_turns"] is None
 
 
 def test_execute_survives_timeout_with_partial_output(tmp_path, monkeypatch):
