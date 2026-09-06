@@ -161,11 +161,16 @@ def _summary_cells(rs: list[dict]) -> Summary:
     # the "Total cost (USD)" column, which is what a variant actually costs to run.
     judge_cost = sum(r.get("judge_cost_usd") or 0 for r in rs)
     degraded = sum(1 for r in ok if r.get("judge") and r["judge"].get("degraded"))
+    # Score/$ and Score/turn are total score earned over total spend/turns among
+    # scored (non-error) rows — sum/sum, not mean/sum, so two identical rows
+    # report the same efficiency as one instead of halving it. Both denominators
+    # are drawn from `ok` (errored rows have no composite to attribute cost to).
     composites = [_task_score(r) for r in ok]
-    mean_composite = statistics.fmean(composites) if composites else 0.0
-    score_per_dollar = f"{mean_composite / cost:.2f}" if cost > 0 else "n/a"
-    total_turns = sum(r["num_turns"] for r in ok if r.get("num_turns"))
-    score_per_turn = f"{mean_composite / total_turns:.3f}" if total_turns > 0 else "n/a"
+    total_composite = sum(composites)
+    ok_cost = sum(r.get("cost_usd") or 0 for r in ok)
+    score_per_dollar = f"{total_composite / ok_cost:.2f}" if ok_cost > 0 else "n/a"
+    total_turns = sum(r.get("num_turns") or 0 for r in ok)
+    score_per_turn = f"{total_composite / total_turns:.3f}" if total_turns > 0 else "n/a"
     return Summary(
         pass_rate=pass_rate,
         mean_judge=mean_judge,

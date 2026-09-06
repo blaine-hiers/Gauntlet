@@ -242,6 +242,43 @@ def test_build_report_score_per_dollar_and_turn():
     assert "0.180" in summary  # 0.9 / 5
 
 
+def test_build_report_score_per_dollar_and_turn_are_scale_invariant():
+    # Review finding: mean(composite) / sum(cost) carries a spurious 1/n factor —
+    # doubling identical rows halved the reported efficiency instead of leaving
+    # it unchanged. sum(composite) / sum(cost) must give the same figure either way.
+    one = result("t1", "current", [True, True], 8)  # composite 0.9
+    one["cost_usd"] = 0.10
+    one["num_turns"] = 5
+    md_one = build_report([one], [], run_label="one")
+    summary_one = md_one[md_one.index("## Variant Summary") : md_one.index("## Per-Task Matrix")]
+    assert "9.00" in summary_one and "0.180" in summary_one
+
+    two = [result("t1", "current", [True, True], 8) for _ in range(2)]
+    for r, idx in zip(two, range(2)):
+        r["cost_usd"] = 0.10
+        r["num_turns"] = 5
+        r["repeat_idx"] = idx
+    md_two = build_report(two, [], run_label="two")
+    summary_two = md_two[md_two.index("## Variant Summary") : md_two.index("## Per-Task Matrix")]
+    assert "9.00" in summary_two and "0.180" in summary_two
+
+
+def test_build_report_score_per_dollar_excludes_errored_rows_from_both_sides():
+    # An errored row has no composite (excluded from the numerator) and must
+    # also be excluded from the cost/turn denominators, or the ratio would be
+    # diluted by spend attributed to a run that produced no score.
+    ok = result("t1", "current", [True, True], 8)  # composite 0.9
+    ok["cost_usd"] = 0.10
+    ok["num_turns"] = 5
+    err = result("t1", "current", [True], None)
+    err["is_error"] = True
+    err["cost_usd"] = 5.00  # large errored spend that must not dilute the ratio
+    err["num_turns"] = 30
+    md = build_report([ok, err], [], run_label="e")
+    summary = md[md.index("## Variant Summary") : md.index("## Per-Task Matrix")]
+    assert "9.00" in summary and "0.180" in summary
+
+
 def test_build_report_no_cost_or_turns_is_na():
     r = result("t1", "current", [True], 8)
     r["cost_usd"] = None
