@@ -292,6 +292,48 @@ def test_compare_missing_label_fails(fake_framework, tmp_path, monkeypatch):
     assert cli.main(["compare", "--labels", "does-not-exist"]) == 1
 
 
+def test_run_stamps_snapshot_provenance_and_judge_cost(fake_framework, tmp_path, monkeypatch):
+    project_root = tmp_path / "gauntlet-project"
+    tasks_dir = project_root / "tasks"
+    tasks_dir.mkdir(parents=True)
+    (tasks_dir / "01-find.yaml").write_text(
+        "id: find-alpha-status\n"
+        "category: find-answer\n"
+        'prompt: "What is the status of Alpha?"\n'
+        "judge:\n"
+        '  rubric: "Must say on track."\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(cli, "load_project_config", lambda: fake_cfg(fake_framework))
+    monkeypatch.setattr(cli.tempfile, "gettempdir", lambda: str(tmp_path / "systemp"))
+    monkeypatch.setattr(cli, "ancestor_context_files", lambda p: [])
+
+    def fake_execute(task, variant, run_dir, cfg):
+        return {
+            "task_id": task.id, "category": task.category, "variant": variant.name,
+            "model": cfg.model, "duration_s": 1.0, "cost_usd": 0.01,
+            "output_text": "Alpha is on track", "exit_code": 0, "is_error": False,
+        }
+
+    seen_samples = []
+
+    def fake_judge(output_text, judge_spec, judge_model, samples=1, **kwargs):
+        seen_samples.append(samples)
+        return {"score": 9, "reasoning": "good", "cost_usd": 0.03, "raw_reply": "{}", "degraded": False}
+
+    monkeypatch.setattr(cli, "execute", fake_execute)
+    monkeypatch.setattr(cli, "judge_output", fake_judge)
+    assert cli.main(["snapshot"]) == 0
+    assert cli.main(["run", "--label", "j", "--judge-samples", "3"]) == 0
+
+    rows = _rows(project_root, "j")
+    assert all(s == 3 for s in seen_samples)
+    assert all(row["judge_cost_usd"] == 0.03 for row in rows)
+    assert all(row["snapshot"]["file_count"] > 0 for row in rows)
+    assert all("manifest_hash" in row["snapshot"] for row in rows)
+
+
 def test_run_rejects_unknown_variant(fake_framework, tmp_path, monkeypatch):
     project_root = tmp_path / "gauntlet-project"
     tasks_dir = project_root / "tasks"

@@ -136,15 +136,92 @@ def _verdict_lines(flagged: list, comparable: list, incomparable: list) -> list[
     return lines
 
 
-def _summary_cells(rs: list[dict]) -> tuple[str, str, str, int, float]:
+@dataclass(frozen=True)
+class Summary:
+    pass_rate: str
+    mean_judge: str
+    runs: int
+    errors: int
+    cost: float
+    judge_cost: float
+    degraded: int
+    score_per_dollar: str
+    score_per_turn: str
+
+
+def _summary_cells(rs: list[dict]) -> Summary:
     ok = [r for r in rs if not r.get("is_error")]
     checks = [c for r in ok for c in r["checks"]]
     pass_rate = f"{100 * sum(c['passed'] for c in checks) / len(checks):.0f}%" if checks else "n/a"
     scores = [r["judge"]["score"] for r in ok if r.get("judge") and r["judge"]["score"] is not None]
     mean_judge = f"{sum(scores) / len(scores):.1f}" if scores else "n/a"
     errors = len(rs) - len(ok)
-    cost = sum(r["cost_usd"] or 0 for r in rs)
-    return pass_rate, mean_judge, str(len(rs)), errors, cost
+    cost = sum(r.get("cost_usd") or 0 for r in rs)
+    # Judge spend is harness overhead, tracked separately so it never inflates
+    # the "Total cost (USD)" column, which is what a variant actually costs to run.
+    judge_cost = sum(r.get("judge_cost_usd") or 0 for r in rs)
+    degraded = sum(1 for r in ok if r.get("judge") and r["judge"].get("degraded"))
+    composites = [_task_score(r) for r in ok]
+    mean_composite = statistics.fmean(composites) if composites else 0.0
+    score_per_dollar = f"{mean_composite / cost:.2f}" if cost > 0 else "n/a"
+    total_turns = sum(r["num_turns"] for r in ok if r.get("num_turns"))
+    score_per_turn = f"{mean_composite / total_turns:.3f}" if total_turns > 0 else "n/a"
+    return Summary(
+        pass_rate=pass_rate,
+        mean_judge=mean_judge,
+        runs=len(rs),
+        errors=errors,
+        cost=cost,
+        judge_cost=judge_cost,
+        degraded=degraded,
+        score_per_dollar=score_per_dollar,
+        score_per_turn=score_per_turn,
+    )
+
+
+def _degraded_rows_section(results: list[dict]) -> list[str]:
+    degraded = [
+        r for r in results
+        if not r.get("is_error") and r.get("judge") and r["judge"].get("degraded")
+    ]
+    if not degraded:
+        return []
+    lines = [
+        "", "## Degraded Judge Rows", "",
+        "Judge output was unparseable (even after the automatic retry) on at least one "
+        "sample for these rows; their score, where present, rests on fewer usable "
+        "samples than were attempted and should not be trusted the same as a clean row.",
+        "",
+        "| Task | Variant | Score | Reasoning |",
+        "|---|---|---|---|",
+    ]
+    for r in degraded:
+        score = r["judge"]["score"]
+        score_s = f"{score:.1f}" if score is not None else "n/a"
+        reasoning = (r["judge"].get("reasoning") or "").replace("|", "\\|").replace("\n", " ")
+        lines.append(f"| {r['task_id']} | {r['variant']} | {score_s} | {reasoning[:200]} |")
+    return lines
+
+
+def _category_section(results: list[dict], key) -> list[str]:
+    by_cat = defaultdict(list)
+    for r in results:
+        by_cat[(r["category"],) + key(r)].append(r)
+    if not by_cat:
+        return []
+    extra_cols = len(next(iter(by_cat))) - 1
+    header_extra = ["Variant"] if extra_cols == 1 else ["Model", "Variant"]
+    lines = [
+        "", "## Per-Category Summary", "",
+        "| Category | " + " | ".join(header_extra)
+        + " | Runs | Errors | Check pass rate | Mean judge score |",
+        "|---" * (2 + extra_cols + 3) + "|",
+    ]
+    for group_key in sorted(by_cat):
+        s = _summary_cells(by_cat[group_key])
+        cols = " | ".join(group_key)
+        lines.append(f"| {cols} | {s.runs} | {s.errors} | {s.pass_rate} | {s.mean_judge} |")
+    return lines
 
 
 def _lint_section(lint_reports: list) -> list[str]:
@@ -171,10 +248,18 @@ def build_report(results: list[dict], lint_reports: list, run_label: str) -> str
     for r in results:
         by_variant[r["variant"]].append(r)
 
-    lines += ["## Variant Summary", "", "| Variant | Runs | Errors | Check pass rate | Mean judge score | Total cost (USD) |", "|---|---|---|---|---|---|"]
+    lines += [
+        "## Variant Summary", "",
+        "| Variant | Runs | Errors | Check pass rate | Mean judge score | Degraded judge | "
+        "Total cost (USD) | Judge cost (USD) | Score/$ | Score/turn |",
+        "|---|---|---|---|---|---|---|---|---|---|",
+    ]
     for variant, rs in sorted(by_variant.items()):
-        pass_rate, mean_judge, runs, errors, cost = _summary_cells(rs)
-        lines.append(f"| {variant} | {runs} | {errors} | {pass_rate} | {mean_judge} | {cost:.2f} |")
+        s = _summary_cells(rs)
+        lines.append(
+            f"| {variant} | {s.runs} | {s.errors} | {s.pass_rate} | {s.mean_judge} | {s.degraded} | "
+            f"{s.cost:.2f} | {s.judge_cost:.2f} | {s.score_per_dollar} | {s.score_per_turn} |"
+        )
 
     lines += ["", "## Per-Task Matrix", "", "| Task | Category | " + " | ".join(sorted(by_variant)) + " |", "|---" * (2 + len(by_variant)) + "|"]
     by_task, attempted, categories = _cells(results, key=lambda r: r["variant"])
@@ -183,8 +268,11 @@ def build_report(results: list[dict], lint_reports: list, run_label: str) -> str
         row = " | ".join(_fmt_cell(cells[v]) if v in cells else "n/a" for v in sorted(by_variant))
         lines.append(f"| {task_id} | {categories[task_id]} | {row} |")
 
+    lines += _category_section(results, key=lambda r: (r["variant"],))
+
     lines += ["", "## Verdicts", "", VERDICT_RULE, ""]
     lines += _verdict_lines(*_split_verdicts(by_task, attempted, "current", "empty"))
+    lines += _degraded_rows_section(results)
     lines += _lint_section(lint_reports)
 
     return "\n".join(lines) + "\n"
@@ -216,13 +304,15 @@ def build_compare(results: list[dict], run_labels: list[str], lint_reports: list
     lines += [
         "## Summary (model × variant)",
         "",
-        "| Model | Variant | Runs | Errors | Check pass rate | Mean judge score | Total cost (USD) |",
-        "|---|---|---|---|---|---|---|",
+        "| Model | Variant | Runs | Errors | Check pass rate | Mean judge score | Degraded judge | "
+        "Total cost (USD) | Judge cost (USD) | Score/$ | Score/turn |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for model, variant in pairs:
-        pass_rate, mean_judge, runs, errors, cost = _summary_cells(by_cell[(model, variant)])
+        s = _summary_cells(by_cell[(model, variant)])
         lines.append(
-            f"| {_short_model(model)} | {variant} | {runs} | {errors} | {pass_rate} | {mean_judge} | {cost:.2f} |"
+            f"| {_short_model(model)} | {variant} | {s.runs} | {s.errors} | {s.pass_rate} | {s.mean_judge} | "
+            f"{s.degraded} | {s.cost:.2f} | {s.judge_cost:.2f} | {s.score_per_dollar} | {s.score_per_turn} |"
         )
 
     col_names = [f"{_short_model(m)}/{v}" for m, v in pairs]
@@ -238,6 +328,8 @@ def build_compare(results: list[dict], run_labels: list[str], lint_reports: list
         cells = by_task.get(task_id, {})
         row = " | ".join(_fmt_cell(cells[p]) if p in cells else "n/a" for p in pairs)
         lines.append(f"| {task_id} | {categories[task_id]} | {row} |")
+
+    lines += _category_section(results, key=lambda r: (_short_model(r["model"]), r["variant"]))
 
     lines += ["", "## Verdicts (per model)", "", VERDICT_RULE, ""]
     for model in models:
@@ -264,6 +356,7 @@ def build_compare(results: list[dict], run_labels: list[str], lint_reports: list
                 f"- **{name}**: not comparable (every `current` or every `empty` run errored) — "
                 f"{', '.join(incomparable)}"
             )
+    lines += _degraded_rows_section(results)
     lines += _lint_section(lint_reports)
 
     return "\n".join(lines) + "\n"

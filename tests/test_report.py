@@ -232,6 +232,59 @@ def test_build_compare_aggregates_repeats():
     assert "**opus-5**: CLAUDE.md pulled its weight" in md
 
 
+def test_build_report_score_per_dollar_and_turn():
+    r = result("t1", "current", [True, True], 8)  # composite 0.9
+    r["cost_usd"] = 0.10
+    r["num_turns"] = 5
+    md = build_report([r], [], run_label="x")
+    summary = md[md.index("## Variant Summary") : md.index("## Per-Task Matrix")]
+    assert "9.00" in summary  # 0.9 / 0.10
+    assert "0.180" in summary  # 0.9 / 5
+
+
+def test_build_report_no_cost_or_turns_is_na():
+    r = result("t1", "current", [True], 8)
+    r["cost_usd"] = None
+    md = build_report([r], [], run_label="x")
+    summary = md[md.index("## Variant Summary") : md.index("## Per-Task Matrix")]
+    assert "n/a" in summary
+
+
+def test_build_report_surfaces_degraded_judge_rows():
+    ok = result("t1", "current", [True], 8)
+    ok["judge"]["degraded"] = False
+    bad = result("t1", "empty", [True], None)
+    bad["judge"] = {"score": None, "reasoning": "unparseable judge reply: garbage", "degraded": True}
+    md = build_report([ok, bad], [], run_label="x")
+    assert "## Degraded Judge Rows" in md
+    section = md[md.index("## Degraded Judge Rows") :]
+    assert "t1" in section and "empty" in section and "unparseable" in section
+
+    # A run with no degraded rows omits the section entirely.
+    md_clean = build_report([ok], [], run_label="y")
+    assert "## Degraded Judge Rows" not in md_clean
+
+
+def test_build_report_judge_cost_kept_separate_from_total_cost():
+    r = result("t1", "current", [True], 8)
+    r["cost_usd"] = 1.00
+    r["judge_cost_usd"] = 0.25
+    md = build_report([r], [], run_label="x")
+    summary = md[md.index("## Variant Summary") : md.index("## Per-Task Matrix")]
+    assert "1.00" in summary and "0.25" in summary
+
+
+def test_build_report_per_category_breakdown():
+    a = result("t1", "current", [True], 8)
+    a["category"] = "find-answer"
+    b = result("t2", "current", [True, False], None)
+    b["category"] = "file-organize"
+    md = build_report([a, b], [], run_label="x")
+    assert "## Per-Category Summary" in md
+    section = md[md.index("## Per-Category Summary") :]
+    assert "find-answer" in section and "file-organize" in section
+
+
 def test_build_report_missing_variant_shows_na():
     # Task with current but no empty variant should show n/a in matrix, not 0.00
     # and should NOT appear in Verdicts (which requires both variants)

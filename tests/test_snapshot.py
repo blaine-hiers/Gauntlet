@@ -1,6 +1,6 @@
 import json
 
-from gauntlet.snapshot import load_manifest, make_snapshot
+from gauntlet.snapshot import load_manifest, load_snapshot_provenance, make_snapshot
 
 
 def test_make_snapshot_copies_excludes_and_manifests(fake_framework, tmp_path):
@@ -14,6 +14,26 @@ def test_make_snapshot_copies_excludes_and_manifests(fake_framework, tmp_path):
     assert "indexes/master-index.md" in manifest
     assert all(len(h) == 64 for h in manifest.values())
     assert load_manifest(dest) == manifest
+
+
+def test_make_snapshot_stamps_provenance(fake_framework, tmp_path):
+    dest = tmp_path / "snap"
+    manifest = make_snapshot(fake_framework, dest, exclude=["~$*"])
+
+    provenance = load_snapshot_provenance(dest)
+    assert provenance["source_root"] == str(fake_framework)
+    assert provenance["file_count"] == len(manifest)
+    assert "T" in provenance["timestamp"]  # ISO 8601
+    assert len(provenance["manifest_hash"]) == 64
+
+    # Re-snapshotting an unchanged source reproduces the same manifest hash.
+    provenance2 = load_snapshot_provenance(dest)
+    make_snapshot(fake_framework, dest, exclude=["~$*"])
+    assert load_snapshot_provenance(dest)["manifest_hash"] == provenance2["manifest_hash"]
+
+
+def test_load_snapshot_provenance_missing_returns_none(tmp_path):
+    assert load_snapshot_provenance(tmp_path / "nonexistent") is None
 
 
 def test_make_snapshot_overwrites_previous(fake_framework, tmp_path):
