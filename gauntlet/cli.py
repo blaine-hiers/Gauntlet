@@ -65,10 +65,13 @@ def cmd_run(
     tasks_dir: Path,
     repeats: int = 1,
     legacy_model: str | None = None,
+    retry_errors: bool = False,
 ) -> int:
     """`legacy_model` is the config's default model *before* any --model override:
     rows written before the model field existed were produced under it, so that
-    is the identity they resume with — not whatever model this run happens to use."""
+    is the identity they resume with — not whatever model this run happens to use.
+    `retry_errors` leaves errored rows out of the resume set so their cells run
+    again; the old rows stay (append-only) and the report already excludes them."""
     if repeats < 1:
         print("--repeats must be at least 1")
         return 1
@@ -114,12 +117,17 @@ def cmd_run(
     # the repeat index: a label re-run under --model must not be skipped as
     # "already recorded", and repeat k of a cell is distinct from repeat k+1.
     # Rows written before either field existed used the config's default model
-    # and were single-sample, hence the defaults.
+    # and were single-sample, hence the defaults. An errored row still counts as
+    # recorded by default — a re-run must not silently re-spend on a cell that
+    # timed out — so an all-error cell stays "not comparable" in the report
+    # until the run is repeated with --retry-errors.
     recorded = set()
     if results_path.is_file():
         for line in results_path.read_text(encoding="utf-8").splitlines():
             try:
                 row = json.loads(line)
+                if retry_errors and row.get("is_error"):
+                    continue
                 recorded.add(
                     (row["task_id"], row["variant"], row.get("model", legacy_model), row.get("repeat_idx", 0))
                 )
@@ -225,6 +233,10 @@ def main(argv: list[str] | None = None) -> int:
         "--repeats", type=int, default=1,
         help="samples per task × variant cell; the report gates verdicts on their spread",
     )
+    p_run.add_argument(
+        "--retry-errors", action="store_true",
+        help="re-run cells whose recorded row errored (timeout, crash) instead of skipping them",
+    )
     p_report = sub.add_parser("report")
     p_report.add_argument("--label", required=True)
     p_compare = sub.add_parser("compare")
@@ -244,7 +256,7 @@ def main(argv: list[str] | None = None) -> int:
             cfg = dataclasses.replace(cfg, model=args.model)
         return cmd_run(
             cfg, args.label, args.variants, tasks_dir,
-            repeats=args.repeats, legacy_model=default_model,
+            repeats=args.repeats, legacy_model=default_model, retry_errors=args.retry_errors,
         )
     if args.command == "report":
         return cmd_report(cfg, args.label)

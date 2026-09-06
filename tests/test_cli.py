@@ -256,6 +256,34 @@ def test_run_repeats(fake_framework, tmp_path, monkeypatch):
     assert cli.main(["run", "--label", "R", "--repeats", "0"]) == 1
 
 
+def test_run_retry_errors_reruns_only_errored_cells(fake_framework, tmp_path, monkeypatch):
+    # Review finding: an all-error cell was in the resume set but out of the
+    # report, so the identical command skipped it forever.
+    project_root = _project_with_one_task(tmp_path, monkeypatch, fake_framework)
+    calls = []
+
+    def flaky_execute(task, variant, run_dir, cfg):
+        calls.append(variant.name)
+        err = variant.name == "empty" and len(calls) < 3  # first `empty` run times out
+        return {
+            "task_id": task.id, "category": task.category, "variant": variant.name,
+            "model": cfg.model, "duration_s": 1.0, "cost_usd": None if err else 0.01,
+            "output_text": "", "exit_code": None if err else 0, "is_error": err,
+        }
+
+    monkeypatch.setattr(cli, "execute", flaky_execute)
+    assert cli.main(["run", "--label", "E"]) == 0
+    assert [r["is_error"] for r in _rows(project_root, "E")] == [False, True]
+
+    assert cli.main(["run", "--label", "E"]) == 0  # default: errored cell stays skipped
+    assert len(_rows(project_root, "E")) == 2
+
+    assert cli.main(["run", "--label", "E", "--retry-errors"]) == 0
+    rows = _rows(project_root, "E")
+    assert len(rows) == 3 and calls == ["current", "empty", "empty"]  # only `empty` re-ran
+    assert [r["is_error"] for r in rows if r["variant"] == "empty"] == [True, False]
+
+
 def test_compare_missing_label_fails(fake_framework, tmp_path, monkeypatch):
     project_root = tmp_path / "gauntlet-project"
     project_root.mkdir(parents=True)

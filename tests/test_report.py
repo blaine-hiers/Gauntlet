@@ -99,6 +99,17 @@ def test_verdict_gate_requires_margin_beyond_noise():
     assert not empty_beats_current(Cell(0.5, 0.0, 1), Cell(0.49, 0.0, 1))
 
 
+def test_aggregate_uses_sample_sd_so_gate_matches_documented_rule():
+    from gauntlet.report import _aggregate
+
+    # Review repro: with population sd the noise scale came out sqrt((n-1)/n)
+    # too small and a 0.09 gap flagged against a documented threshold of 0.10.
+    current = _aggregate([0.5, 0.5])
+    empty = _aggregate([0.49, 0.69])
+    assert abs(empty.sd - 0.1414) < 1e-3
+    assert not empty_beats_current(current, empty)
+
+
 def _repeat(task_id, variant, judge_score, idx):
     r = result(task_id, variant, [], judge_score)
     r["repeat_idx"] = idx
@@ -116,7 +127,7 @@ def test_build_report_aggregates_repeats():
     summary = md[md.index("## Variant Summary") : md.index("## Per-Task Matrix")]
     assert "| current | 4 |" in summary and "| empty | 4 |" in summary
     matrix = md[md.index("## Per-Task Matrix") : md.index("## Verdicts")]
-    assert "| t1 | find-answer | 0.50 ±0.00 | 0.50 ±0.10 |" in matrix
+    assert "| t1 | find-answer | 0.50 ±0.00 | 0.50 ±0.14 |" in matrix  # sample sd of 0.4/0.6
     verdicts = md[md.index("## Verdicts") :]
     assert "- t2" in verdicts
     assert "- t1" not in verdicts
@@ -187,7 +198,7 @@ def test_build_compare_notes_label_pooling_and_keeps_lint():
     b.update(model="claude-opus-5", label="run-b")
     md = build_compare([a, b], run_labels=["run-a", "run-b"], lint_reports=[SR("Ghost", 40, 1, [])])
     assert "across 2 labels (run-a, run-b)" in md
-    assert "0.85 ±0.05" in md  # composites 0.9 and 0.8, pooled across the two labels
+    assert "0.85 ±0.07" in md  # composites 0.9 and 0.8, pooled across the two labels
     assert "## Static Lint" in md and "Ghost" in md
 
     md_one = build_compare([a], run_labels=["run-a"])
@@ -217,7 +228,7 @@ def test_build_compare_aggregates_repeats():
     ]
     md = build_compare(results, run_labels=["r"])
     assert "| opus-5 | current | 2 |" in md
-    assert "0.50 ±0.10" in md
+    assert "0.50 ±0.14" in md
     assert "**opus-5**: CLAUDE.md pulled its weight" in md
 
 

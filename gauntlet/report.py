@@ -21,12 +21,14 @@ class Cell:
     """One task × variant cell aggregated over its successful runs."""
 
     mean: float
-    sd: float  # population sd of the composite; 0.0 for a single sample
+    sd: float  # sample sd of the composite; 0.0 for a single sample
     n: int
 
 
 def _aggregate(scores: list[float]) -> Cell:
-    sd = statistics.pstdev(scores) if len(scores) > 1 else 0.0
+    # Sample sd, so sd**2 / n in the gate is the standard error the report
+    # claims; the population estimator undershoots it by sqrt((n-1)/n).
+    sd = statistics.stdev(scores) if len(scores) > 1 else 0.0
     return Cell(mean=statistics.fmean(scores), sd=sd, n=len(scores))
 
 

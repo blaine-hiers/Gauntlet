@@ -47,7 +47,9 @@ run cannot tell a real gap from noise. `--repeats N` runs each cell N times;
 the report then shows each cell as mean ± sd and only flags a task when the
 `empty` variant beats `current` by more than the standard error of the
 difference. Re-running a label with a higher `--repeats` tops the cells up
-rather than starting over.
+rather than starting over. A cell whose run errored (timeout, crash) is
+excluded from scoring but still counts as recorded, so a plain re-run does
+not re-spend on it; pass `--retry-errors` to run those cells again.
 
 ```bash
 python -m gauntlet.cli run --label baseline --repeats 5
