@@ -132,6 +132,29 @@ def test_judge_retries_once_then_succeeds(monkeypatch):
     assert len(captured_prompt) == 2  # confirms the retry actually fired
 
 
+def test_judge_retry_cost_includes_the_unparseable_call(monkeypatch):
+    # PR review finding: only the retry's cost was kept, so the billed-but-
+    # unparseable first call vanished from judge_cost_usd.
+    import subprocess as sp
+
+    replies = [("not json at all", 0.20), ('{"score": 7, "reasoning": "ok"}', 0.05)]
+    calls = {"n": 0}
+
+    def fake_run(cmd, **kwargs):
+        text, cost = replies[min(calls["n"], 1)]
+        calls["n"] += 1
+        return sp.CompletedProcess(
+            cmd, 0, stdout=json.dumps({"result": text, "total_cost_usd": cost}), stderr=""
+        )
+
+    monkeypatch.setattr("gauntlet.judge.find_claude", lambda: "claude")
+    monkeypatch.setattr("gauntlet.judge.subprocess.run", fake_run)
+    verdict = judge_output("whatever", {"rubric": "r"}, "claude-fable-5")
+    assert verdict["score"] == 7
+    assert abs(verdict["cost_usd"] - 0.25) < 1e-9
+    assert calls["n"] == 2
+
+
 def test_judge_samples_takes_median_and_sums_cost(monkeypatch):
     monkeypatch.setattr("gauntlet.judge.find_claude", lambda: "claude")
     monkeypatch.setattr(

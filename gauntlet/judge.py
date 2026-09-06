@@ -117,7 +117,10 @@ def judge_output(
     for _ in range(max(1, samples)):
         r = _call_once(prompt, judge_model, timeout_s)
         if r["score"] is None and r["retryable"]:
+            first_cost = r["cost_usd"] or 0
             r = _call_once(prompt, judge_model, timeout_s)  # retry once, unparseable output only
+            # The unparseable call was still billed; the sample's cost is both calls.
+            r["cost_usd"] = (r["cost_usd"] or 0) + first_cost
         attempts.append(r)
 
     total_cost = sum(a["cost_usd"] or 0 for a in attempts)

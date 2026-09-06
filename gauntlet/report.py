@@ -149,6 +149,14 @@ class Summary:
     score_per_turn: str
 
 
+def _efficiency(ok: list[dict], field: str, places: int) -> str:
+    rows = [r for r in ok if r.get(field) is not None]
+    denominator = sum(r[field] for r in rows)
+    if denominator <= 0:
+        return "n/a"
+    return f"{sum(_task_score(r) for r in rows) / denominator:.{places}f}"
+
+
 def _summary_cells(rs: list[dict]) -> Summary:
     ok = [r for r in rs if not r.get("is_error")]
     checks = [c for r in ok for c in r["checks"]]
@@ -163,14 +171,12 @@ def _summary_cells(rs: list[dict]) -> Summary:
     degraded = sum(1 for r in ok if r.get("judge") and r["judge"].get("degraded"))
     # Score/$ and Score/turn are total score earned over total spend/turns among
     # scored (non-error) rows — sum/sum, not mean/sum, so two identical rows
-    # report the same efficiency as one instead of halving it. Both denominators
-    # are drawn from `ok` (errored rows have no composite to attribute cost to).
-    composites = [_task_score(r) for r in ok]
-    total_composite = sum(composites)
-    ok_cost = sum(r.get("cost_usd") or 0 for r in ok)
-    score_per_dollar = f"{total_composite / ok_cost:.2f}" if ok_cost > 0 else "n/a"
-    total_turns = sum(r.get("num_turns") or 0 for r in ok)
-    score_per_turn = f"{total_composite / total_turns:.3f}" if total_turns > 0 else "n/a"
+    # report the same efficiency as one instead of halving it. A row that lacks
+    # the denominator field (a pre-Phase-2 row with no num_turns, a provider
+    # that reports no dollar cost) is left out of the numerator too; counting
+    # its score against zero spend would inflate the ratio.
+    score_per_dollar = _efficiency(ok, "cost_usd", 2)
+    score_per_turn = _efficiency(ok, "num_turns", 3)
     return Summary(
         pass_rate=pass_rate,
         mean_judge=mean_judge,

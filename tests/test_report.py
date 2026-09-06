@@ -279,6 +279,21 @@ def test_build_report_score_per_dollar_excludes_errored_rows_from_both_sides():
     assert "9.00" in summary and "0.180" in summary
 
 
+def test_build_report_efficiency_skips_rows_missing_the_denominator():
+    # PR review finding: a legacy row with no num_turns counted as 0 turns in
+    # the denominator while its whole composite stayed in the numerator, so
+    # mixing old and new rows inflated Score/turn. Same rule for cost.
+    legacy = result("t1", "current", [True, True], 10)  # composite 1.0, no num_turns
+    legacy.pop("cost_usd")
+    new = result("t2", "current", [True, False], 5)  # composite 0.5
+    new["cost_usd"] = 0.10
+    new["num_turns"] = 5
+    md = build_report([legacy, new], [], run_label="mix")
+    summary = md[md.index("## Variant Summary") : md.index("## Per-Task Matrix")]
+    assert "0.100" in summary and "0.300" not in summary  # 0.5 / 5, not 1.5 / 5
+    assert "5.00" in summary and "15.00" not in summary  # 0.5 / 0.10, not 1.5 / 0.10
+
+
 def test_build_report_no_cost_or_turns_is_na():
     r = result("t1", "current", [True], 8)
     r["cost_usd"] = None
