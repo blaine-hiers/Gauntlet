@@ -1,7 +1,12 @@
 import subprocess
 
 from gauntlet.config import Config, Variant
-from gauntlet.runner import ISOLATION_FLAGS, execute, prepare_run_dir
+from gauntlet.runner import (
+    ISOLATION_FLAGS,
+    ancestor_context_files,
+    execute,
+    prepare_run_dir,
+)
 from gauntlet.snapshot import make_snapshot
 from gauntlet.tasks import GoldenTask
 
@@ -48,6 +53,36 @@ def test_prepare_run_dir_variants(fake_framework, tmp_path):
         snap, work, task, Variant("trimmed", "variants/trimmed.md"), tasks_dir, project_root
     )
     assert (d3 / "CLAUDE.md").read_text(encoding="utf-8") == "# Trimmed\n"
+
+
+def test_prepare_run_dir_separates_repeats(fake_framework, tmp_path):
+    snap = tmp_path / "snap"
+    make_snapshot(fake_framework, snap, exclude=[])
+    work = tmp_path / "work"
+    args = (snap, work, make_task(), Variant("current", None), tmp_path / "tasks", tmp_path)
+    d0 = prepare_run_dir(*args, repeat_idx=0)
+    d1 = prepare_run_dir(*args, repeat_idx=1)
+    assert d0 != d1
+    assert d0 == prepare_run_dir(*args)  # default repeat is 0
+
+
+def test_ancestor_context_files(tmp_path):
+    # The CLI checks every ancestor for CLAUDE.md and .claude/CLAUDE.md; the run
+    # dir's own file is the variant under test and must not count.
+    (tmp_path / "CLAUDE.md").write_text("top", encoding="utf-8")
+    mid = tmp_path / "mid"
+    (mid / ".claude").mkdir(parents=True)
+    (mid / ".claude" / "CLAUDE.md").write_text("user-style memory", encoding="utf-8")
+    run_dir = mid / "runs" / "abc"
+    run_dir.mkdir(parents=True)
+    (run_dir / "CLAUDE.md").write_text("variant", encoding="utf-8")
+
+    found = ancestor_context_files(run_dir)
+    assert (tmp_path / "CLAUDE.md").resolve() in found
+    assert (mid / ".claude" / "CLAUDE.md").resolve() in found
+    assert (run_dir / "CLAUDE.md").resolve() not in found
+    # Only what lies under tmp_path is asserted: pytest's own tmp root may sit
+    # under a directory holding a CLAUDE.md, which is the very leak this guards.
 
 
 def test_execute_builds_command_and_parses_json(tmp_path, monkeypatch):

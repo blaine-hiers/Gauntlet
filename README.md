@@ -99,22 +99,29 @@ having no context file, it is costing tokens for nothing.
 
 Context leaks into a run from two directions, and the harness closes both.
 
-**From the project.** Runs execute in a directory under the system temp root,
-never inside this repository. Claude Code loads `CLAUDE.md` from the working
-directory upward, so a run nested inside the project would inherit the
-project's own context and quietly invalidate the A/B contrast: the `empty`
-variant would no longer be empty. Each run directory is deleted as soon as its
-checks are scored.
+**From the directory tree.** Claude Code loads `CLAUDE.md` (and
+`.claude/CLAUDE.md`) from the working directory and every ancestor up to the
+filesystem root. Runs therefore execute under the system temp root, never
+inside this repository, so they cannot inherit the project's own context. But
+the walk does not stop at the temp root: on Windows the temp dir sits under
+the user's home, which puts `~/.claude/CLAUDE.md` on the path as if it were
+project context. Before a run starts, the harness checks every ancestor of the
+run directory and **refuses to run** if any holds a context file — set
+`work_root` in the config to a directory outside your home when it does. The
+directory used is recorded on every row as `work_root`.
 
-**From the user.** Claude Code also loads the invoking user's `~/.claude`
-settings — enabled plugins, skills, and MCP servers — regardless of the working
-directory. The runner passes `--setting-sources project,local` so user-scope
-settings are not read, and `--strict-mcp-config` so no MCP server loads at all.
-The flags used are recorded on every result row as `isolation`, so a run's
-posture can be checked after the fact.
+**From the user's settings.** Claude Code also loads the invoking user's
+`~/.claude` settings — user memory, enabled plugins, skills, and MCP servers —
+regardless of the working directory. The runner passes
+`--setting-sources project,local` so user-scope settings and memory are not
+read, and `--strict-mcp-config` so no MCP server loads at all. The flags are
+recorded on every row as `isolation`.
 
-These are the details that make the numbers trustworthy, and both are easy to
-get wrong by accident.
+Both were verified against claude 2.1.261 with marker files: a run under the
+flags reads the run directory's own `CLAUDE.md` and nothing from `~/.claude`,
+*provided* the run directory has no ancestor holding one. These are the
+details that make the numbers trustworthy, and they are easy to get wrong by
+accident.
 
 ## Layout
 

@@ -17,6 +17,24 @@ from gauntlet.tasks import GoldenTask
 # actually empty. Stamped onto every result row so old runs are self-describing.
 ISOLATION_FLAGS = ["--setting-sources", "project,local", "--strict-mcp-config"]
 
+# What the CLI looks for at every level from cwd up to the filesystem root.
+CONTEXT_FILES = ("CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md")
+
+
+def ancestor_context_files(path: Path) -> list[Path]:
+    """Context files the CLI would auto-load into a run at `path` from its
+    ancestors. The setting-source flags do not touch this walk, so a run dir
+    under any directory holding one inherits it. On Windows the system temp
+    dir sits under the user's home, which puts ~/.claude/CLAUDE.md on the walk
+    as if it were project context — verified against claude 2.1.261."""
+    found = []
+    for ancestor in Path(path).resolve().parents:
+        for name in CONTEXT_FILES:
+            f = ancestor / name
+            if f.is_file():
+                found.append(f)
+    return found
+
 
 def find_claude() -> str:
     exe = shutil.which("claude")
@@ -32,10 +50,13 @@ def prepare_run_dir(
     variant: Variant,
     tasks_dir: Path,
     project_root: Path,
+    repeat_idx: int = 0,
 ) -> Path:
     # Short hashed dir name: Windows caps paths at 260 chars, and deep framework
     # trees only fit if the run-dir prefix stays shorter than the snapshot's own.
-    name = hashlib.sha1(f"{task.id}--{variant.name}".encode()).hexdigest()[:10]
+    # The repeat index is in the hash so a repeat never reuses a path whose
+    # previous occupant failed to delete.
+    name = hashlib.sha1(f"{task.id}--{variant.name}--{repeat_idx}".encode()).hexdigest()[:10]
     run_dir = work_root / name
     skipped = copy_tree_tolerant(snapshot_dir, run_dir, exclude=[])
     if skipped:

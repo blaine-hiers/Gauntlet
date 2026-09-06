@@ -23,6 +23,15 @@ class Config:
     # harness itself lives inside a synced library, so its 300MB+ snapshot of that
     # library never lands back in the library (recursion + sync bloat).
     data_dir: Path | None = None
+    # Where per-run scratch directories are created. None = the system temp dir.
+    # Set this when the temp dir sits under a directory holding a CLAUDE.md —
+    # on Windows it lives under the user's home, so ~/.claude/CLAUDE.md would be
+    # inherited by every run; the runner refuses to start in that case.
+    work_root: Path | None = None
+
+
+def _optional_path(raw: dict, key: str) -> Path | None:
+    return Path(os.path.expandvars(raw[key])).expanduser() if raw.get(key) else None
 
 
 def load_config(path: Path) -> Config:
@@ -39,9 +48,6 @@ def load_config(path: Path) -> Config:
         timeout_s=raw.get("timeout_s", 900),
         exclude=raw.get("exclude", []),
         variants=variants,
-        data_dir=(
-            Path(os.path.expandvars(raw["data_dir"])).expanduser()
-            if raw.get("data_dir")
-            else None
-        ),
+        data_dir=_optional_path(raw, "data_dir"),
+        work_root=_optional_path(raw, "work_root"),
     )

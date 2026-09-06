@@ -1,9 +1,11 @@
+import dataclasses
 import json
 import tempfile
 from pathlib import Path
 
 from gauntlet import cli
 from gauntlet.config import Config, Variant
+from gauntlet.runner import ancestor_context_files as cli_real_ancestor_context_files
 
 
 def fake_cfg(fake_framework):
@@ -35,6 +37,9 @@ def test_snapshot_lint_run_report_pipeline(fake_framework, tmp_path, monkeypatch
     monkeypatch.setattr(cli, "load_project_config", lambda: fake_cfg(fake_framework))
     # Keep run-dir temp usage inside pytest's sandbox instead of the real system temp dir.
     monkeypatch.setattr(cli.tempfile, "gettempdir", lambda: str(tmp_path / "systemp"))
+    # pytest's tmp root may itself sit under a directory holding a CLAUDE.md
+    # (on Windows it is under the user's home); the preflight has its own test.
+    monkeypatch.setattr(cli, "ancestor_context_files", lambda p: [])
 
     assert cli.main(["snapshot"]) == 0
     assert (project_root / "data" / "snapshot" / "CLAUDE.md").is_file()
@@ -93,6 +98,7 @@ def test_run_model_override_and_compare(fake_framework, tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(cli, "load_project_config", lambda: fake_cfg(fake_framework))
     monkeypatch.setattr(cli.tempfile, "gettempdir", lambda: str(tmp_path / "systemp"))
+    monkeypatch.setattr(cli, "ancestor_context_files", lambda p: [])
 
     seen_models = []
 
@@ -133,6 +139,7 @@ def _project_with_one_task(tmp_path, monkeypatch, fake_framework):
     monkeypatch.setattr(cli, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(cli, "load_project_config", lambda: fake_cfg(fake_framework))
     monkeypatch.setattr(cli.tempfile, "gettempdir", lambda: str(tmp_path / "systemp"))
+    monkeypatch.setattr(cli, "ancestor_context_files", lambda p: [])
 
     def fake_execute(task, variant, run_dir, cfg):
         return {
@@ -144,6 +151,28 @@ def _project_with_one_task(tmp_path, monkeypatch, fake_framework):
     monkeypatch.setattr(cli, "execute", fake_execute)
     assert cli.main(["snapshot"]) == 0
     return project_root
+
+
+def test_run_refuses_when_an_ancestor_holds_context(fake_framework, tmp_path, monkeypatch, capsys):
+    project_root = _project_with_one_task(tmp_path, monkeypatch, fake_framework)
+    monkeypatch.setattr(cli, "ancestor_context_files", cli_real_ancestor_context_files)
+    (tmp_path / "systemp" / ".claude").mkdir(parents=True)
+    (tmp_path / "systemp" / ".claude" / "CLAUDE.md").write_text("leak", encoding="utf-8")
+
+    assert cli.main(["run", "--label", "L"]) == 1
+    out = capsys.readouterr().out
+    assert "refusing to run" in out and "CLAUDE.md" in out
+    assert not (project_root / "data" / "runs" / "L").exists()
+
+
+def test_run_uses_configured_work_root(fake_framework, tmp_path, monkeypatch):
+    project_root = _project_with_one_task(tmp_path, monkeypatch, fake_framework)
+    cfg = dataclasses.replace(fake_cfg(fake_framework), work_root=tmp_path / "elsewhere")
+    monkeypatch.setattr(cli, "load_project_config", lambda: cfg)
+
+    assert cli.main(["run", "--label", "W"]) == 0
+    rows = _rows(project_root, "W")
+    assert all(row["work_root"].startswith(str(tmp_path / "elsewhere")) for row in rows)
 
 
 def _rows(project_root, label):
@@ -185,6 +214,27 @@ def test_run_resume_reads_rows_without_model_or_repeat_fields(fake_framework, tm
     rows = _rows(project_root, "old")
     assert len(rows) == 2  # legacy 'current' row kept, only 'empty' was run
     assert [r["variant"] for r in rows] == ["current", "empty"]
+
+    # A legacy row was produced under the config's default model, so a --model
+    # re-run must treat it as that model — not as the model now in effect — and
+    # run every cell for the new model.
+    assert cli.main(["run", "--label", "old", "--model", "claude-opus-5"]) == 0
+    rows = _rows(project_root, "old")
+    assert len(rows) == 4
+    assert sum(1 for r in rows if r.get("model") == "claude-opus-5") == 2
+
+
+def test_report_on_multi_model_label_writes_comparison(fake_framework, tmp_path, monkeypatch, capsys):
+    # A label topped up under --model holds two models; blending them into one
+    # cell would report between-model variance as run-to-run noise.
+    project_root = _project_with_one_task(tmp_path, monkeypatch, fake_framework)
+    assert cli.main(["run", "--label", "mm"]) == 0
+    assert cli.main(["run", "--label", "mm", "--model", "claude-opus-5"]) == 0
+    assert cli.main(["report", "--label", "mm"]) == 0
+    md = (project_root / "data" / "runs" / "mm" / "report.md").read_text(encoding="utf-8")
+    assert "Model Comparison" in md
+    assert "fable-5/current" in md and "opus-5/current" in md
+    assert "2 models" in capsys.readouterr().out
 
 
 def test_run_repeats(fake_framework, tmp_path, monkeypatch):

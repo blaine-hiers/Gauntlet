@@ -15,7 +15,7 @@ from gauntlet.config import Config, load_config
 from gauntlet.judge import judge_output
 from gauntlet.lint import lint_claude_md
 from gauntlet.report import build_compare, build_report
-from gauntlet.runner import execute, prepare_run_dir
+from gauntlet.runner import ancestor_context_files, execute, prepare_run_dir
 from gauntlet.scoring import run_checks
 from gauntlet.snapshot import _rmtree_force, load_manifest, make_snapshot
 from gauntlet.tasks import load_tasks
@@ -29,6 +29,13 @@ def load_project_config() -> Config:
 
 def data_root(cfg: Config) -> Path:
     return cfg.data_dir if cfg.data_dir else PROJECT_ROOT / "data"
+
+
+def work_root_for(cfg: Config, label: str) -> Path:
+    # "lit/<8-char hash>" keeps the run-dir prefix shorter than the snapshot's own
+    # path, so deep framework trees stay under Windows' 260-char path limit.
+    base = cfg.work_root if cfg.work_root else Path(tempfile.gettempdir())
+    return base / "lit" / hashlib.sha1(label.encode()).hexdigest()[:8]
 
 
 def cmd_snapshot(cfg: Config) -> int:
@@ -52,11 +59,20 @@ def cmd_lint(cfg: Config) -> int:
 
 
 def cmd_run(
-    cfg: Config, label: str, variants_filter: str | None, tasks_dir: Path, repeats: int = 1
+    cfg: Config,
+    label: str,
+    variants_filter: str | None,
+    tasks_dir: Path,
+    repeats: int = 1,
+    legacy_model: str | None = None,
 ) -> int:
+    """`legacy_model` is the config's default model *before* any --model override:
+    rows written before the model field existed were produced under it, so that
+    is the identity they resume with — not whatever model this run happens to use."""
     if repeats < 1:
         print("--repeats must be at least 1")
         return 1
+    legacy_model = legacy_model or cfg.model
     snap = data_root(cfg) / "snapshot"
     if not snap.is_dir():
         print("no snapshot — run `snapshot` first")
@@ -78,13 +94,20 @@ def cmd_run(
             print(f"unknown variant(s): {', '.join(unknown)}")
             return 1
         variants = [v for v in variants if v.name in wanted]
+    work_root = work_root_for(cfg, label)
+    # The CLI auto-loads CLAUDE.md from every ancestor of the run dir, and the
+    # isolation flags do not stop that walk. A run under such a directory would
+    # inherit context in every variant, including `empty`, so refuse to start.
+    inherited = ancestor_context_files(work_root)
+    if inherited:
+        print(f"refusing to run: {work_root} would inherit context from")
+        for f in inherited:
+            print(f"  {f}")
+        print("set work_root in gauntlet.config.json to a directory with no CLAUDE.md "
+              "in any ancestor (on Windows the system temp dir sits under your home)")
+        return 1
     out_dir = data_root(cfg) / "runs" / label
     out_dir.mkdir(parents=True, exist_ok=True)
-    # "lit/<8-char hash>" keeps the run-dir prefix shorter than the snapshot's own
-    # path, so deep framework trees stay under Windows' 260-char path limit.
-    work_root = (
-        Path(tempfile.gettempdir()) / "lit" / hashlib.sha1(label.encode()).hexdigest()[:8]
-    )
     results_path = out_dir / "results.jsonl"
 
     # Read existing results to avoid duplicates. The key carries the model and
@@ -98,7 +121,7 @@ def cmd_run(
             try:
                 row = json.loads(line)
                 recorded.add(
-                    (row["task_id"], row["variant"], row.get("model", cfg.model), row.get("repeat_idx", 0))
+                    (row["task_id"], row["variant"], row.get("model", legacy_model), row.get("repeat_idx", 0))
                 )
             except (json.JSONDecodeError, KeyError):
                 pass
@@ -111,10 +134,13 @@ def cmd_run(
                     if (task.id, variant.name, cfg.model, repeat_idx) in recorded:
                         print(f"{cell}: skipped (already recorded)")
                         continue
-                    run_dir = prepare_run_dir(snap, work_root, task, variant, tasks_dir, PROJECT_ROOT)
+                    run_dir = prepare_run_dir(
+                        snap, work_root, task, variant, tasks_dir, PROJECT_ROOT, repeat_idx=repeat_idx
+                    )
                     result = execute(task, variant, run_dir, cfg)
                     result.setdefault("model", cfg.model)
                     result["repeat_idx"] = repeat_idx
+                    result["work_root"] = str(work_root)
                     result["checks"] = run_checks(task.checks, run_dir, manifest)
                     try:
                         _rmtree_force(run_dir)
@@ -161,12 +187,22 @@ def cmd_report(cfg: Config, label: str) -> int:
         print(f"no results at {results_path}")
         return 1
     results = [json.loads(line) for line in results_path.read_text(encoding="utf-8").splitlines()]
-    snap = data_root(cfg) / "snapshot"
-    claude_md = snap / "CLAUDE.md"
-    lint_reports = (
-        lint_claude_md(claude_md.read_text(encoding="utf-8"), snap) if claude_md.is_file() else []
-    )
-    md = build_report(results, lint_reports, run_label=label)
+    for row in results:
+        row.setdefault("model", cfg.model)
+    models = sorted({r["model"] for r in results})
+    if len(models) > 1:
+        # One label can now hold several models (a --model re-run tops it up).
+        # Blending them into one cell would report between-model variance as
+        # run-to-run noise, so hand off to the report that keeps them apart.
+        print(f"label holds {len(models)} models ({', '.join(models)}); writing a model comparison")
+        md = build_compare(results, run_labels=[label])
+    else:
+        snap = data_root(cfg) / "snapshot"
+        claude_md = snap / "CLAUDE.md"
+        lint_reports = (
+            lint_claude_md(claude_md.read_text(encoding="utf-8"), snap) if claude_md.is_file() else []
+        )
+        md = build_report(results, lint_reports, run_label=label)
     report_path = out_dir / "report.md"
     report_path.write_text(md, encoding="utf-8")
     print(f"report -> {report_path}")
@@ -201,9 +237,13 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_lint(cfg)
     if args.command == "run":
         tasks_dir = Path(args.tasks_dir) if args.tasks_dir else PROJECT_ROOT / "tasks"
+        default_model = cfg.model
         if args.model:
             cfg = dataclasses.replace(cfg, model=args.model)
-        return cmd_run(cfg, args.label, args.variants, tasks_dir, repeats=args.repeats)
+        return cmd_run(
+            cfg, args.label, args.variants, tasks_dir,
+            repeats=args.repeats, legacy_model=default_model,
+        )
     if args.command == "report":
         return cmd_report(cfg, args.label)
     if args.command == "compare":

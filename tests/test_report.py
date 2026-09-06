@@ -122,6 +122,50 @@ def test_build_report_aggregates_repeats():
     assert "- t1" not in verdicts
 
 
+def test_build_report_single_sample_verdicts_are_unconfirmed():
+    results = [
+        result("t1", "current", [True, False], 6),
+        result("t1", "empty", [True, True], 8),
+    ]
+    md = build_report(results, [], run_label="x")
+    verdicts = md[md.index("## Verdicts") :]
+    assert "- t1" in verdicts
+    assert "unconfirmed" in verdicts
+    assert "not earning its keep" not in verdicts  # that sentence is for confirmed flags only
+
+
+def test_build_report_excludes_error_rows_from_cells():
+    # A timed-out run passes file_unchanged because it did nothing; folding it
+    # into the cell would raise the mean and shrink the spread.
+    ok = _repeat("t1", "empty", 2, 0)
+    err = _repeat("t1", "empty", None, 1)
+    err["is_error"] = True
+    err["checks"] = [{"type": "file_unchanged", "path": "x", "passed": True}]
+    results = [_repeat("t1", "current", 8, 0), ok, err]
+    md = build_report(results, [], run_label="e")
+    summary = md[md.index("## Variant Summary") : md.index("## Per-Task Matrix")]
+    assert "| empty | 2 | 1 |" in summary  # 2 runs, 1 error
+    matrix = md[md.index("## Per-Task Matrix") : md.index("## Verdicts")]
+    assert "| t1 | find-answer | 0.80 | 0.20 |" in matrix  # error row not averaged in
+
+    all_err = [_repeat("t2", "current", 8, 0)]
+    e = _repeat("t2", "empty", None, 0)
+    e["is_error"] = True
+    md = build_report(all_err + [e], [], run_label="e2")
+    assert "| t2 | find-answer | 0.80 | n/a |" in md
+
+
+def test_build_report_refuses_mixed_models():
+    import pytest
+
+    a = result("t1", "current", [True], 8)
+    a["model"] = "claude-opus-5"
+    b = result("t1", "empty", [True], 8)
+    b["model"] = "claude-haiku-4-5"
+    with pytest.raises(ValueError, match="build_compare"):
+        build_report([a, b], [], run_label="x")
+
+
 def test_build_compare_aggregates_repeats():
     def mrow(task_id, variant, model, judge_score, idx):
         r = _repeat(task_id, variant, judge_score, idx)
