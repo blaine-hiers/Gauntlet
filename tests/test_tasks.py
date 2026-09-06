@@ -140,6 +140,39 @@ checks:
         load_tasks(tmp_path)
 
 
+@pytest.mark.parametrize("ctype", ["file_exists", "file_not_exists", "file_unchanged"])
+def test_load_tasks_rejects_response_target_for_file_checks(tmp_path: Path, ctype):
+    # $response has no backing file: file_unchanged would crash on sha256_file
+    # at run time, and file_exists/file_not_exists are trivially always
+    # True/False for it — reject all three at load time instead.
+    text = f"""\
+id: t
+category: find-answer
+prompt: "Test"
+checks:
+  - type: {ctype}
+    path: "$response"
+"""
+    (tmp_path / "bad.yaml").write_text(text, encoding="utf-8")
+    with pytest.raises(ValueError, match=r"\$response"):
+        load_tasks(tmp_path)
+
+
+def test_load_tasks_accepts_response_target_for_content_checks(tmp_path: Path):
+    text = """\
+id: t
+category: find-answer
+prompt: "Test"
+checks:
+  - type: file_not_contains
+    path: "$response"
+    text: "Jacksonville"
+"""
+    (tmp_path / "ok.yaml").write_text(text, encoding="utf-8")
+    tasks = load_tasks(tmp_path)
+    assert tasks[0].checks[0]["path"] == "$response"
+
+
 def test_load_tasks_rejects_file_matches_without_pattern(tmp_path: Path):
     text = """\
 id: t
