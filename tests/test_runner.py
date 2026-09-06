@@ -1,7 +1,12 @@
 import subprocess
 
 from gauntlet.config import Config, Variant
-from gauntlet.runner import execute, prepare_run_dir
+from gauntlet.runner import (
+    ISOLATION_FLAGS,
+    ancestor_context_files,
+    execute,
+    prepare_run_dir,
+)
 from gauntlet.snapshot import make_snapshot
 from gauntlet.tasks import GoldenTask
 
@@ -50,6 +55,38 @@ def test_prepare_run_dir_variants(fake_framework, tmp_path):
     assert (d3 / "CLAUDE.md").read_text(encoding="utf-8") == "# Trimmed\n"
 
 
+def test_prepare_run_dir_separates_repeats(fake_framework, tmp_path):
+    snap = tmp_path / "snap"
+    make_snapshot(fake_framework, snap, exclude=[])
+    work = tmp_path / "work"
+    args = (snap, work, make_task(), Variant("current", None), tmp_path / "tasks", tmp_path)
+    d0 = prepare_run_dir(*args, repeat_idx=0)
+    d1 = prepare_run_dir(*args, repeat_idx=1)
+    assert d0 != d1
+    assert d0 == prepare_run_dir(*args)  # default repeat is 0
+    # The model is a result-key axis too; two models must not share a path.
+    assert prepare_run_dir(*args, model="claude-opus-5") != prepare_run_dir(*args, model="claude-haiku-4-5")
+
+
+def test_ancestor_context_files(tmp_path):
+    # The CLI checks every ancestor for CLAUDE.md and .claude/CLAUDE.md; the run
+    # dir's own file is the variant under test and must not count.
+    (tmp_path / "CLAUDE.md").write_text("top", encoding="utf-8")
+    mid = tmp_path / "mid"
+    (mid / ".claude").mkdir(parents=True)
+    (mid / ".claude" / "CLAUDE.md").write_text("user-style memory", encoding="utf-8")
+    run_dir = mid / "runs" / "abc"
+    run_dir.mkdir(parents=True)
+    (run_dir / "CLAUDE.md").write_text("variant", encoding="utf-8")
+
+    found = ancestor_context_files(run_dir)
+    assert (tmp_path / "CLAUDE.md").resolve() in found
+    assert (mid / ".claude" / "CLAUDE.md").resolve() in found
+    assert (run_dir / "CLAUDE.md").resolve() not in found
+    # Only what lies under tmp_path is asserted: pytest's own tmp root may sit
+    # under a directory holding a CLAUDE.md, which is the very leak this guards.
+
+
 def test_execute_builds_command_and_parses_json(tmp_path, monkeypatch):
     captured = {}
 
@@ -65,11 +102,14 @@ def test_execute_builds_command_and_parses_json(tmp_path, monkeypatch):
 
     result = execute(make_task(), Variant("current", None), tmp_path, make_cfg(tmp_path))
 
-    # Assert full command exactly
+    # Assert full command exactly. The trailing flags are the user-scope isolation:
+    # no ~/.claude settings (plugins, skills, user MCP) and no MCP at all.
     assert captured["cmd"] == [
         "claude", "-p", "hello", "--output-format", "json",
-        "--permission-mode", "acceptEdits", "--model", "claude-fable-5", "--max-turns", "30"
+        "--permission-mode", "acceptEdits", "--model", "claude-fable-5", "--max-turns", "30",
+        "--setting-sources", "project,local", "--strict-mcp-config",
     ]
+    assert result["isolation"] == ISOLATION_FLAGS
 
     # Assert subprocess.run kwargs
     kwargs = captured["kwargs"]
@@ -127,3 +167,4 @@ def test_execute_survives_timeout_with_no_output(tmp_path, monkeypatch):
     assert result["exit_code"] is None
     assert result["cost_usd"] is None
     assert result["output_text"] == ""
+    assert result["isolation"] == ISOLATION_FLAGS  # a timed-out row is still self-describing

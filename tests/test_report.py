@@ -1,5 +1,11 @@
 from gauntlet.lint import SectionReport
-from gauntlet.report import _task_score, build_compare, build_report
+from gauntlet.report import (
+    Cell,
+    _task_score,
+    build_compare,
+    build_report,
+    empty_beats_current,
+)
 
 
 def result(task_id, variant, passes, judge_score):
@@ -77,6 +83,153 @@ def test_build_compare_cross_model():
     verdicts = md[md.index("## Verdicts") :]
     assert "**haiku-4-5**: 1/1 tasks did as well or better" in verdicts
     assert "**opus-5**: CLAUDE.md pulled its weight" in verdicts
+
+
+def test_verdict_gate_requires_margin_beyond_noise():
+    # Plan's worked case: empty repeats 0.4 and 0.6 (mean 0.5, sd 0.1) against a
+    # current of 0.5 — a coin flip, must not flag. Empty at 0.9/0.9 must.
+    current = Cell(mean=0.5, sd=0.0, n=2)
+    assert not empty_beats_current(current, Cell(mean=0.5, sd=0.1, n=2))
+    assert empty_beats_current(current, Cell(mean=0.9, sd=0.0, n=2))
+    # A gap that clears the standard error of the difference flags.
+    assert empty_beats_current(Cell(0.5, 0.1, 4), Cell(0.7, 0.1, 4))
+    assert not empty_beats_current(Cell(0.5, 0.1, 4), Cell(0.55, 0.1, 4))
+    # Single samples carry no spread: the old "as well or better" rule stands.
+    assert empty_beats_current(Cell(0.5, 0.0, 1), Cell(0.5, 0.0, 1))
+    assert not empty_beats_current(Cell(0.5, 0.0, 1), Cell(0.49, 0.0, 1))
+
+
+def test_aggregate_uses_sample_sd_so_gate_matches_documented_rule():
+    from gauntlet.report import _aggregate
+
+    # Review repro: with population sd the noise scale came out sqrt((n-1)/n)
+    # too small and a 0.09 gap flagged against a documented threshold of 0.10.
+    current = _aggregate([0.5, 0.5])
+    empty = _aggregate([0.49, 0.69])
+    assert abs(empty.sd - 0.1414) < 1e-3
+    assert not empty_beats_current(current, empty)
+
+
+def _repeat(task_id, variant, judge_score, idx):
+    r = result(task_id, variant, [], judge_score)
+    r["repeat_idx"] = idx
+    return r
+
+
+def test_build_report_aggregates_repeats():
+    results = [
+        _repeat("t1", "current", 5, 0), _repeat("t1", "current", 5, 1),
+        _repeat("t1", "empty", 4, 0), _repeat("t1", "empty", 6, 1),   # noisy tie → no flag
+        _repeat("t2", "current", 5, 0), _repeat("t2", "current", 5, 1),
+        _repeat("t2", "empty", 9, 0), _repeat("t2", "empty", 9, 1),   # clear win → flag
+    ]
+    md = build_report(results, [], run_label="rep")
+    summary = md[md.index("## Variant Summary") : md.index("## Per-Task Matrix")]
+    assert "| current | 4 |" in summary and "| empty | 4 |" in summary
+    matrix = md[md.index("## Per-Task Matrix") : md.index("## Verdicts")]
+    assert "| t1 | find-answer | 0.50 ±0.00 | 0.50 ±0.14 |" in matrix  # sample sd of 0.4/0.6
+    verdicts = md[md.index("## Verdicts") :]
+    assert "- t2" in verdicts
+    assert "- t1" not in verdicts
+
+
+def test_build_report_single_sample_verdicts_are_unconfirmed():
+    results = [
+        result("t1", "current", [True, False], 6),
+        result("t1", "empty", [True, True], 8),
+    ]
+    md = build_report(results, [], run_label="x")
+    verdicts = md[md.index("## Verdicts") :]
+    assert "- t1" in verdicts
+    assert "unconfirmed" in verdicts
+    assert "not earning its keep" not in verdicts  # that sentence is for confirmed flags only
+
+
+def test_build_report_excludes_error_rows_from_cells():
+    # A timed-out run passes file_unchanged because it did nothing; folding it
+    # into the cell would raise the mean and shrink the spread.
+    ok = _repeat("t1", "empty", 2, 0)
+    err = _repeat("t1", "empty", None, 1)
+    err["is_error"] = True
+    err["checks"] = [{"type": "file_unchanged", "path": "x", "passed": True}]
+    results = [_repeat("t1", "current", 8, 0), ok, err]
+    md = build_report(results, [], run_label="e")
+    summary = md[md.index("## Variant Summary") : md.index("## Per-Task Matrix")]
+    assert "| empty | 2 | 1 |" in summary  # 2 runs, 1 error
+    matrix = md[md.index("## Per-Task Matrix") : md.index("## Verdicts")]
+    assert "| t1 | find-answer | 0.80 | 0.20 |" in matrix  # error row not averaged in
+
+    all_err = [_repeat("t2", "current", 8, 0)]
+    e = _repeat("t2", "empty", None, 0)
+    e["is_error"] = True
+    md = build_report(all_err + [e], [], run_label="e2")
+    assert "| t2 | find-answer | 0.80 | n/a |" in md
+
+
+def test_build_report_all_error_current_is_not_a_pass():
+    # Regression from excluding error rows: a task whose `current` runs all
+    # errored used to vanish from the verdict, and the report then printed
+    # "pulling its weight" with nothing to base it on.
+    rows = []
+    for i in range(3):
+        e = _repeat("t1", "current", None, i)
+        e["is_error"] = True
+        rows.append(e)
+        rows.append(_repeat("t1", "empty", 10, i))
+    md = build_report(rows, [], run_label="err")
+    verdicts = md[md.index("## Verdicts") :]
+    assert "pulling its weight" not in verdicts
+    assert "not comparable" in verdicts and "- t1" in verdicts
+
+    # The same shape per model in compare.
+    for r in rows:
+        r["model"] = "claude-opus-5"
+    md = build_compare(rows, run_labels=["err"])
+    assert "**opus-5**: not comparable" in md and "t1" in md
+    assert "pulled its weight" not in md
+
+
+def test_build_compare_notes_label_pooling_and_keeps_lint():
+    from gauntlet.lint import SectionReport as SR
+
+    a = result("t1", "current", [True], 8)
+    a.update(model="claude-opus-5", label="run-a")
+    b = result("t1", "current", [True], 6)
+    b.update(model="claude-opus-5", label="run-b")
+    md = build_compare([a, b], run_labels=["run-a", "run-b"], lint_reports=[SR("Ghost", 40, 1, [])])
+    assert "across 2 labels (run-a, run-b)" in md
+    assert "0.85 ±0.07" in md  # composites 0.9 and 0.8, pooled across the two labels
+    assert "## Static Lint" in md and "Ghost" in md
+
+    md_one = build_compare([a], run_labels=["run-a"])
+    assert "across" not in md_one
+
+
+def test_build_report_refuses_mixed_models():
+    import pytest
+
+    a = result("t1", "current", [True], 8)
+    a["model"] = "claude-opus-5"
+    b = result("t1", "empty", [True], 8)
+    b["model"] = "claude-haiku-4-5"
+    with pytest.raises(ValueError, match="build_compare"):
+        build_report([a, b], [], run_label="x")
+
+
+def test_build_compare_aggregates_repeats():
+    def mrow(task_id, variant, model, judge_score, idx):
+        r = _repeat(task_id, variant, judge_score, idx)
+        r["model"] = model
+        return r
+
+    results = [
+        mrow("t1", "current", "claude-opus-5", 5, 0), mrow("t1", "current", "claude-opus-5", 5, 1),
+        mrow("t1", "empty", "claude-opus-5", 4, 0), mrow("t1", "empty", "claude-opus-5", 6, 1),
+    ]
+    md = build_compare(results, run_labels=["r"])
+    assert "| opus-5 | current | 2 |" in md
+    assert "0.50 ±0.14" in md
+    assert "**opus-5**: CLAUDE.md pulled its weight" in md
 
 
 def test_build_report_missing_variant_shows_na():

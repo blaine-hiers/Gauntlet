@@ -10,6 +10,32 @@ from gauntlet.snapshot import copy_tree_tolerant
 from gauntlet.tasks import GoldenTask
 
 
+# The run dir under the temp root keeps *project*-side context out of a run, but
+# the CLI also loads the invoking user's ~/.claude settings (plugins, enabled
+# skills, MCP servers). Dropping the `user` setting source and refusing every MCP
+# server not passed explicitly closes that channel, so the `empty` variant is
+# actually empty. Stamped onto every result row so old runs are self-describing.
+ISOLATION_FLAGS = ["--setting-sources", "project,local", "--strict-mcp-config"]
+
+# What the CLI looks for at every level from cwd up to the filesystem root.
+CONTEXT_FILES = ("CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md")
+
+
+def ancestor_context_files(path: Path) -> list[Path]:
+    """Context files the CLI would auto-load into a run at `path` from its
+    ancestors. The setting-source flags do not touch this walk, so a run dir
+    under any directory holding one inherits it. On Windows the system temp
+    dir sits under the user's home, which puts ~/.claude/CLAUDE.md on the walk
+    as if it were project context — verified against claude 2.1.261."""
+    found = []
+    for ancestor in Path(path).resolve().parents:
+        for name in CONTEXT_FILES:
+            f = ancestor / name
+            if f.is_file():
+                found.append(f)
+    return found
+
+
 def find_claude() -> str:
     exe = shutil.which("claude")
     if not exe:
@@ -24,10 +50,16 @@ def prepare_run_dir(
     variant: Variant,
     tasks_dir: Path,
     project_root: Path,
+    repeat_idx: int = 0,
+    model: str = "",
 ) -> Path:
     # Short hashed dir name: Windows caps paths at 260 chars, and deep framework
     # trees only fit if the run-dir prefix stays shorter than the snapshot's own.
-    name = hashlib.sha1(f"{task.id}--{variant.name}".encode()).hexdigest()[:10]
+    # Every axis of the result key (model, repeat) is in the hash so no cell ever
+    # reuses a path whose previous occupant failed to delete.
+    name = hashlib.sha1(
+        f"{task.id}--{variant.name}--{model}--{repeat_idx}".encode()
+    ).hexdigest()[:10]
     run_dir = work_root / name
     skipped = copy_tree_tolerant(snapshot_dir, run_dir, exclude=[])
     if skipped:
@@ -60,6 +92,7 @@ def execute(task: GoldenTask, variant: Variant, run_dir: Path, cfg: Config) -> d
         cfg.model,
         "--max-turns",
         str(cfg.max_turns),
+        *ISOLATION_FLAGS,
     ]
     start = time.monotonic()
     try:
@@ -87,6 +120,7 @@ def execute(task: GoldenTask, variant: Variant, run_dir: Path, cfg: Config) -> d
             "output_text": stdout,
             "exit_code": None,
             "is_error": True,
+            "isolation": list(ISOLATION_FLAGS),
         }
     duration = time.monotonic() - start
     try:
@@ -105,4 +139,5 @@ def execute(task: GoldenTask, variant: Variant, run_dir: Path, cfg: Config) -> d
         "output_text": payload.get("result", ""),
         "exit_code": proc.returncode,
         "is_error": is_error,
+        "isolation": list(ISOLATION_FLAGS),
     }
