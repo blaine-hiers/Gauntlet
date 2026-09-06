@@ -55,6 +55,13 @@ not re-spend on it; pass `--retry-errors` to run those cells again.
 python -m gauntlet.cli run --label baseline --repeats 5
 ```
 
+For a rubric that is genuinely borderline, `--judge-samples K` grades each row
+K times and takes the median score instead of a single call. Either way, an
+unparseable judge reply is retried once before being accepted as a failure;
+if it still can't be parsed, the row's score is `None` and it is listed under
+"Degraded Judge Rows" in the report rather than silently dropped from the
+mean. The raw judge reply is kept on every row for audit.
+
 ## How a task is scored
 
 Each golden task carries two independent gates, and both are reported:
