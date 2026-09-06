@@ -51,12 +51,15 @@ def prepare_run_dir(
     tasks_dir: Path,
     project_root: Path,
     repeat_idx: int = 0,
+    model: str = "",
 ) -> Path:
     # Short hashed dir name: Windows caps paths at 260 chars, and deep framework
     # trees only fit if the run-dir prefix stays shorter than the snapshot's own.
-    # The repeat index is in the hash so a repeat never reuses a path whose
-    # previous occupant failed to delete.
-    name = hashlib.sha1(f"{task.id}--{variant.name}--{repeat_idx}".encode()).hexdigest()[:10]
+    # Every axis of the result key (model, repeat) is in the hash so no cell ever
+    # reuses a path whose previous occupant failed to delete.
+    name = hashlib.sha1(
+        f"{task.id}--{variant.name}--{model}--{repeat_idx}".encode()
+    ).hexdigest()[:10]
     run_dir = work_root / name
     skipped = copy_tree_tolerant(snapshot_dir, run_dir, exclude=[])
     if skipped:

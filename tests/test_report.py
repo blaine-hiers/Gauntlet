@@ -155,6 +155,45 @@ def test_build_report_excludes_error_rows_from_cells():
     assert "| t2 | find-answer | 0.80 | n/a |" in md
 
 
+def test_build_report_all_error_current_is_not_a_pass():
+    # Regression from excluding error rows: a task whose `current` runs all
+    # errored used to vanish from the verdict, and the report then printed
+    # "pulling its weight" with nothing to base it on.
+    rows = []
+    for i in range(3):
+        e = _repeat("t1", "current", None, i)
+        e["is_error"] = True
+        rows.append(e)
+        rows.append(_repeat("t1", "empty", 10, i))
+    md = build_report(rows, [], run_label="err")
+    verdicts = md[md.index("## Verdicts") :]
+    assert "pulling its weight" not in verdicts
+    assert "not comparable" in verdicts and "- t1" in verdicts
+
+    # The same shape per model in compare.
+    for r in rows:
+        r["model"] = "claude-opus-5"
+    md = build_compare(rows, run_labels=["err"])
+    assert "**opus-5**: not comparable" in md and "t1" in md
+    assert "pulled its weight" not in md
+
+
+def test_build_compare_notes_label_pooling_and_keeps_lint():
+    from gauntlet.lint import SectionReport as SR
+
+    a = result("t1", "current", [True], 8)
+    a.update(model="claude-opus-5", label="run-a")
+    b = result("t1", "current", [True], 6)
+    b.update(model="claude-opus-5", label="run-b")
+    md = build_compare([a, b], run_labels=["run-a", "run-b"], lint_reports=[SR("Ghost", 40, 1, [])])
+    assert "across 2 labels (run-a, run-b)" in md
+    assert "0.85 ±0.05" in md  # composites 0.9 and 0.8, pooled across the two labels
+    assert "## Static Lint" in md and "Ghost" in md
+
+    md_one = build_compare([a], run_labels=["run-a"])
+    assert "across" not in md_one
+
+
 def test_build_report_refuses_mixed_models():
     import pytest
 

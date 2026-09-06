@@ -135,7 +135,8 @@ def cmd_run(
                         print(f"{cell}: skipped (already recorded)")
                         continue
                     run_dir = prepare_run_dir(
-                        snap, work_root, task, variant, tasks_dir, PROJECT_ROOT, repeat_idx=repeat_idx
+                        snap, work_root, task, variant, tasks_dir, PROJECT_ROOT,
+                        repeat_idx=repeat_idx, model=cfg.model,
                     )
                     result = execute(task, variant, run_dir, cfg)
                     result.setdefault("model", cfg.model)
@@ -172,6 +173,7 @@ def cmd_compare(cfg: Config, labels: list[str], out_name: str) -> int:
             # Rows from runs before the model axis existed carry no model field;
             # those runs always used the config's default model.
             row.setdefault("model", cfg.model)
+            row["label"] = label  # lets the report say when cells pool labels
             rows.append(row)
     md = build_compare(rows, run_labels=labels)
     out_path = data_root(cfg) / "runs" / f"{out_name}.md"
@@ -189,19 +191,19 @@ def cmd_report(cfg: Config, label: str) -> int:
     results = [json.loads(line) for line in results_path.read_text(encoding="utf-8").splitlines()]
     for row in results:
         row.setdefault("model", cfg.model)
+    snap = data_root(cfg) / "snapshot"
+    claude_md = snap / "CLAUDE.md"
+    lint_reports = (
+        lint_claude_md(claude_md.read_text(encoding="utf-8"), snap) if claude_md.is_file() else []
+    )
     models = sorted({r["model"] for r in results})
     if len(models) > 1:
         # One label can now hold several models (a --model re-run tops it up).
         # Blending them into one cell would report between-model variance as
         # run-to-run noise, so hand off to the report that keeps them apart.
         print(f"label holds {len(models)} models ({', '.join(models)}); writing a model comparison")
-        md = build_compare(results, run_labels=[label])
+        md = build_compare(results, run_labels=[label], lint_reports=lint_reports)
     else:
-        snap = data_root(cfg) / "snapshot"
-        claude_md = snap / "CLAUDE.md"
-        lint_reports = (
-            lint_claude_md(claude_md.read_text(encoding="utf-8"), snap) if claude_md.is_file() else []
-        )
         md = build_report(results, lint_reports, run_label=label)
     report_path = out_dir / "report.md"
     report_path.write_text(md, encoding="utf-8")

@@ -234,6 +234,7 @@ def test_report_on_multi_model_label_writes_comparison(fake_framework, tmp_path,
     md = (project_root / "data" / "runs" / "mm" / "report.md").read_text(encoding="utf-8")
     assert "Model Comparison" in md
     assert "fable-5/current" in md and "opus-5/current" in md
+    assert "## Static Lint" in md and "Ghost Section" in md  # lint survives the hand-off
     assert "2 models" in capsys.readouterr().out
 
 

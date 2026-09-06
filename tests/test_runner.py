@@ -64,6 +64,8 @@ def test_prepare_run_dir_separates_repeats(fake_framework, tmp_path):
     d1 = prepare_run_dir(*args, repeat_idx=1)
     assert d0 != d1
     assert d0 == prepare_run_dir(*args)  # default repeat is 0
+    # The model is a result-key axis too; two models must not share a path.
+    assert prepare_run_dir(*args, model="claude-opus-5") != prepare_run_dir(*args, model="claude-haiku-4-5")
 
 
 def test_ancestor_context_files(tmp_path):
