@@ -1,7 +1,7 @@
 import subprocess
 
 from gauntlet.config import Config, Variant
-from gauntlet.runner import execute, prepare_run_dir
+from gauntlet.runner import ISOLATION_FLAGS, execute, prepare_run_dir
 from gauntlet.snapshot import make_snapshot
 from gauntlet.tasks import GoldenTask
 
@@ -65,11 +65,14 @@ def test_execute_builds_command_and_parses_json(tmp_path, monkeypatch):
 
     result = execute(make_task(), Variant("current", None), tmp_path, make_cfg(tmp_path))
 
-    # Assert full command exactly
+    # Assert full command exactly. The trailing flags are the user-scope isolation:
+    # no ~/.claude settings (plugins, skills, user MCP) and no MCP at all.
     assert captured["cmd"] == [
         "claude", "-p", "hello", "--output-format", "json",
-        "--permission-mode", "acceptEdits", "--model", "claude-fable-5", "--max-turns", "30"
+        "--permission-mode", "acceptEdits", "--model", "claude-fable-5", "--max-turns", "30",
+        "--setting-sources", "project,local", "--strict-mcp-config",
     ]
+    assert result["isolation"] == ISOLATION_FLAGS
 
     # Assert subprocess.run kwargs
     kwargs = captured["kwargs"]
@@ -127,3 +130,4 @@ def test_execute_survives_timeout_with_no_output(tmp_path, monkeypatch):
     assert result["exit_code"] is None
     assert result["cost_usd"] is None
     assert result["output_text"] == ""
+    assert result["isolation"] == ISOLATION_FLAGS  # a timed-out row is still self-describing

@@ -42,6 +42,17 @@ python -m gauntlet.cli report --label baseline   # scored markdown report
 Run it again under a new label whenever a new model ships or the context file
 changes materially, then diff the reports.
 
+Every task × variant cell is one sample of a stochastic process, so a single
+run cannot tell a real gap from noise. `--repeats N` runs each cell N times;
+the report then shows each cell as mean ± sd and only flags a task when the
+`empty` variant beats `current` by more than the standard error of the
+difference. Re-running a label with a higher `--repeats` tops the cells up
+rather than starting over.
+
+```bash
+python -m gauntlet.cli run --label baseline --repeats 5
+```
+
 ## How a task is scored
 
 Each golden task carries two independent gates, and both are reported:
@@ -86,14 +97,24 @@ having no context file, it is costing tokens for nothing.
 
 ## Contamination isolation
 
-Runs execute in a directory under the system temp root, never inside this
-repository. Claude Code loads `CLAUDE.md` from the working directory upward,
-so a run nested inside the project would inherit the project's own context and
-quietly invalidate the A/B contrast: the `empty` variant would no longer be
-empty. Each run directory is deleted as soon as its checks are scored.
+Context leaks into a run from two directions, and the harness closes both.
 
-This is the detail that makes the numbers trustworthy, and it is easy to get
-wrong by accident.
+**From the project.** Runs execute in a directory under the system temp root,
+never inside this repository. Claude Code loads `CLAUDE.md` from the working
+directory upward, so a run nested inside the project would inherit the
+project's own context and quietly invalidate the A/B contrast: the `empty`
+variant would no longer be empty. Each run directory is deleted as soon as its
+checks are scored.
+
+**From the user.** Claude Code also loads the invoking user's `~/.claude`
+settings — enabled plugins, skills, and MCP servers — regardless of the working
+directory. The runner passes `--setting-sources project,local` so user-scope
+settings are not read, and `--strict-mcp-config` so no MCP server loads at all.
+The flags used are recorded on every result row as `isolation`, so a run's
+posture can be checked after the fact.
+
+These are the details that make the numbers trustworthy, and both are easy to
+get wrong by accident.
 
 ## Layout
 

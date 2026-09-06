@@ -1,5 +1,11 @@
 from gauntlet.lint import SectionReport
-from gauntlet.report import _task_score, build_compare, build_report
+from gauntlet.report import (
+    Cell,
+    _task_score,
+    build_compare,
+    build_report,
+    empty_beats_current,
+)
 
 
 def result(task_id, variant, passes, judge_score):
@@ -77,6 +83,59 @@ def test_build_compare_cross_model():
     verdicts = md[md.index("## Verdicts") :]
     assert "**haiku-4-5**: 1/1 tasks did as well or better" in verdicts
     assert "**opus-5**: CLAUDE.md pulled its weight" in verdicts
+
+
+def test_verdict_gate_requires_margin_beyond_noise():
+    # Plan's worked case: empty repeats 0.4 and 0.6 (mean 0.5, sd 0.1) against a
+    # current of 0.5 — a coin flip, must not flag. Empty at 0.9/0.9 must.
+    current = Cell(mean=0.5, sd=0.0, n=2)
+    assert not empty_beats_current(current, Cell(mean=0.5, sd=0.1, n=2))
+    assert empty_beats_current(current, Cell(mean=0.9, sd=0.0, n=2))
+    # A gap that clears the standard error of the difference flags.
+    assert empty_beats_current(Cell(0.5, 0.1, 4), Cell(0.7, 0.1, 4))
+    assert not empty_beats_current(Cell(0.5, 0.1, 4), Cell(0.55, 0.1, 4))
+    # Single samples carry no spread: the old "as well or better" rule stands.
+    assert empty_beats_current(Cell(0.5, 0.0, 1), Cell(0.5, 0.0, 1))
+    assert not empty_beats_current(Cell(0.5, 0.0, 1), Cell(0.49, 0.0, 1))
+
+
+def _repeat(task_id, variant, judge_score, idx):
+    r = result(task_id, variant, [], judge_score)
+    r["repeat_idx"] = idx
+    return r
+
+
+def test_build_report_aggregates_repeats():
+    results = [
+        _repeat("t1", "current", 5, 0), _repeat("t1", "current", 5, 1),
+        _repeat("t1", "empty", 4, 0), _repeat("t1", "empty", 6, 1),   # noisy tie → no flag
+        _repeat("t2", "current", 5, 0), _repeat("t2", "current", 5, 1),
+        _repeat("t2", "empty", 9, 0), _repeat("t2", "empty", 9, 1),   # clear win → flag
+    ]
+    md = build_report(results, [], run_label="rep")
+    summary = md[md.index("## Variant Summary") : md.index("## Per-Task Matrix")]
+    assert "| current | 4 |" in summary and "| empty | 4 |" in summary
+    matrix = md[md.index("## Per-Task Matrix") : md.index("## Verdicts")]
+    assert "| t1 | find-answer | 0.50 ±0.00 | 0.50 ±0.10 |" in matrix
+    verdicts = md[md.index("## Verdicts") :]
+    assert "- t2" in verdicts
+    assert "- t1" not in verdicts
+
+
+def test_build_compare_aggregates_repeats():
+    def mrow(task_id, variant, model, judge_score, idx):
+        r = _repeat(task_id, variant, judge_score, idx)
+        r["model"] = model
+        return r
+
+    results = [
+        mrow("t1", "current", "claude-opus-5", 5, 0), mrow("t1", "current", "claude-opus-5", 5, 1),
+        mrow("t1", "empty", "claude-opus-5", 4, 0), mrow("t1", "empty", "claude-opus-5", 6, 1),
+    ]
+    md = build_compare(results, run_labels=["r"])
+    assert "| opus-5 | current | 2 |" in md
+    assert "0.50 ±0.10" in md
+    assert "**opus-5**: CLAUDE.md pulled its weight" in md
 
 
 def test_build_report_missing_variant_shows_na():

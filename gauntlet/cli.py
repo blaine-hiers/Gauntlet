@@ -51,7 +51,12 @@ def cmd_lint(cfg: Config) -> int:
     return 0
 
 
-def cmd_run(cfg: Config, label: str, variants_filter: str | None, tasks_dir: Path) -> int:
+def cmd_run(
+    cfg: Config, label: str, variants_filter: str | None, tasks_dir: Path, repeats: int = 1
+) -> int:
+    if repeats < 1:
+        print("--repeats must be at least 1")
+        return 1
     snap = data_root(cfg) / "snapshot"
     if not snap.is_dir():
         print("no snapshot — run `snapshot` first")
@@ -82,39 +87,49 @@ def cmd_run(cfg: Config, label: str, variants_filter: str | None, tasks_dir: Pat
     )
     results_path = out_dir / "results.jsonl"
 
-    # Read existing results to avoid duplicates
-    recorded_pairs = set()
+    # Read existing results to avoid duplicates. The key carries the model and
+    # the repeat index: a label re-run under --model must not be skipped as
+    # "already recorded", and repeat k of a cell is distinct from repeat k+1.
+    # Rows written before either field existed used the config's default model
+    # and were single-sample, hence the defaults.
+    recorded = set()
     if results_path.is_file():
         for line in results_path.read_text(encoding="utf-8").splitlines():
             try:
                 row = json.loads(line)
-                recorded_pairs.add((row["task_id"], row["variant"]))
+                recorded.add(
+                    (row["task_id"], row["variant"], row.get("model", cfg.model), row.get("repeat_idx", 0))
+                )
             except (json.JSONDecodeError, KeyError):
                 pass
 
     with results_path.open("a", encoding="utf-8") as out:
         for task in tasks:
             for variant in variants:
-                if (task.id, variant.name) in recorded_pairs:
-                    print(f"{task.id} × {variant.name}: skipped (already recorded)")
-                    continue
-                run_dir = prepare_run_dir(snap, work_root, task, variant, tasks_dir, PROJECT_ROOT)
-                result = execute(task, variant, run_dir, cfg)
-                result["checks"] = run_checks(task.checks, run_dir, manifest)
-                try:
-                    _rmtree_force(run_dir)
-                except OSError:
-                    print(f"warning: could not delete run dir {run_dir}")
-                result["judge"] = (
-                    judge_output(result["output_text"], task.judge, cfg.judge_model)
-                    if task.judge and not result["is_error"]
-                    else None
-                )
-                out.write(json.dumps(result) + "\n")
-                out.flush()
-                print(f"{task.id} × {variant.name}: "
-                      f"checks {sum(c['passed'] for c in result['checks'])}/{len(result['checks'])}"
-                      + (f", judge {result['judge']['score']}" if result["judge"] else ""))
+                for repeat_idx in range(repeats):
+                    cell = f"{task.id} × {variant.name}" + (f" #{repeat_idx}" if repeats > 1 else "")
+                    if (task.id, variant.name, cfg.model, repeat_idx) in recorded:
+                        print(f"{cell}: skipped (already recorded)")
+                        continue
+                    run_dir = prepare_run_dir(snap, work_root, task, variant, tasks_dir, PROJECT_ROOT)
+                    result = execute(task, variant, run_dir, cfg)
+                    result.setdefault("model", cfg.model)
+                    result["repeat_idx"] = repeat_idx
+                    result["checks"] = run_checks(task.checks, run_dir, manifest)
+                    try:
+                        _rmtree_force(run_dir)
+                    except OSError:
+                        print(f"warning: could not delete run dir {run_dir}")
+                    result["judge"] = (
+                        judge_output(result["output_text"], task.judge, cfg.judge_model)
+                        if task.judge and not result["is_error"]
+                        else None
+                    )
+                    out.write(json.dumps(result) + "\n")
+                    out.flush()
+                    print(f"{cell}: "
+                          f"checks {sum(c['passed'] for c in result['checks'])}/{len(result['checks'])}"
+                          + (f", judge {result['judge']['score']}" if result["judge"] else ""))
     print(f"results -> {results_path}")
     return 0
 
@@ -168,6 +183,10 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--variants", default=None)
     p_run.add_argument("--tasks-dir", default=None)
     p_run.add_argument("--model", default=None, help="override config model for this run")
+    p_run.add_argument(
+        "--repeats", type=int, default=1,
+        help="samples per task × variant cell; the report gates verdicts on their spread",
+    )
     p_report = sub.add_parser("report")
     p_report.add_argument("--label", required=True)
     p_compare = sub.add_parser("compare")
@@ -184,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         tasks_dir = Path(args.tasks_dir) if args.tasks_dir else PROJECT_ROOT / "tasks"
         if args.model:
             cfg = dataclasses.replace(cfg, model=args.model)
-        return cmd_run(cfg, args.label, args.variants, tasks_dir)
+        return cmd_run(cfg, args.label, args.variants, tasks_dir, repeats=args.repeats)
     if args.command == "report":
         return cmd_report(cfg, args.label)
     if args.command == "compare":

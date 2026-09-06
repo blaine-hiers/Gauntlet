@@ -10,6 +10,14 @@ from gauntlet.snapshot import copy_tree_tolerant
 from gauntlet.tasks import GoldenTask
 
 
+# The run dir under the temp root keeps *project*-side context out of a run, but
+# the CLI also loads the invoking user's ~/.claude settings (plugins, enabled
+# skills, MCP servers). Dropping the `user` setting source and refusing every MCP
+# server not passed explicitly closes that channel, so the `empty` variant is
+# actually empty. Stamped onto every result row so old runs are self-describing.
+ISOLATION_FLAGS = ["--setting-sources", "project,local", "--strict-mcp-config"]
+
+
 def find_claude() -> str:
     exe = shutil.which("claude")
     if not exe:
@@ -60,6 +68,7 @@ def execute(task: GoldenTask, variant: Variant, run_dir: Path, cfg: Config) -> d
         cfg.model,
         "--max-turns",
         str(cfg.max_turns),
+        *ISOLATION_FLAGS,
     ]
     start = time.monotonic()
     try:
@@ -87,6 +96,7 @@ def execute(task: GoldenTask, variant: Variant, run_dir: Path, cfg: Config) -> d
             "output_text": stdout,
             "exit_code": None,
             "is_error": True,
+            "isolation": list(ISOLATION_FLAGS),
         }
     duration = time.monotonic() - start
     try:
@@ -105,4 +115,5 @@ def execute(task: GoldenTask, variant: Variant, run_dir: Path, cfg: Config) -> d
         "output_text": payload.get("result", ""),
         "exit_code": proc.returncode,
         "is_error": is_error,
+        "isolation": list(ISOLATION_FLAGS),
     }
