@@ -4,6 +4,8 @@ import hashlib
 import json
 import sys
 import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 # Windows consoles default to cp1252, which cannot print the framework's unicode
@@ -63,6 +65,59 @@ def cmd_lint(cfg: Config) -> int:
     return 0
 
 
+def _run_cell(
+    task,
+    variant,
+    repeat_idx: int,
+    cell: str,
+    *,
+    snap: Path,
+    work_root: Path,
+    tasks_dir: Path,
+    cfg: Config,
+    manifest,
+    snapshot_provenance,
+    judge_samples: int,
+):
+    """Run one task x variant x repeat cell and return (result, log_lines).
+
+    Nothing here prints. Under --concurrency the cells finish interleaved, and
+    half of one cell's output landing inside another's is how a console log
+    stops being readable at exactly the moment you need it. The caller emits
+    each buffer in one piece, under the same lock that appends the row."""
+    lines: list[str] = []
+    run_dir = prepare_run_dir(
+        snap, work_root, task, variant, tasks_dir, PROJECT_ROOT,
+        repeat_idx=repeat_idx, model=cfg.model, log=lines.append,
+    )
+    result = execute(task, variant, run_dir, cfg)
+    result.setdefault("model", cfg.model)
+    result["repeat_idx"] = repeat_idx
+    result["work_root"] = str(work_root)
+    result["snapshot"] = snapshot_provenance
+    result["checks"] = run_checks(
+        task.checks, run_dir, manifest, result.get("output_text", "")
+    )
+    try:
+        _rmtree_force(run_dir)
+    except OSError:
+        lines.append(f"warning: could not delete run dir {run_dir}")
+    result["judge"] = (
+        judge_output(
+            result["output_text"], task.judge, cfg.judge_model, samples=judge_samples
+        )
+        if task.judge and not result["is_error"]
+        else None
+    )
+    result["judge_cost_usd"] = result["judge"]["cost_usd"] if result["judge"] else None
+    lines.append(
+        f"{cell}: "
+        f"checks {sum(c['passed'] for c in result['checks'])}/{len(result['checks'])}"
+        + (f", judge {result['judge']['score']}" if result["judge"] else "")
+    )
+    return result, lines
+
+
 def cmd_run(
     cfg: Config,
     label: str,
@@ -72,6 +127,7 @@ def cmd_run(
     legacy_model: str | None = None,
     retry_errors: bool = False,
     judge_samples: int = 1,
+    concurrency: int = 1,
 ) -> int:
     """`legacy_model` is the config's default model *before* any --model override:
     rows written before the model field existed were produced under it, so that
@@ -80,6 +136,9 @@ def cmd_run(
     again; the old rows stay (append-only) and the report already excludes them."""
     if repeats < 1:
         print("--repeats must be at least 1")
+        return 1
+    if concurrency < 1:
+        print("--concurrency must be at least 1")
         return 1
     legacy_model = legacy_model or cfg.model
     snap = data_root(cfg) / "snapshot"
@@ -141,43 +200,51 @@ def cmd_run(
             except (json.JSONDecodeError, KeyError):
                 pass
 
+    # Resolve the whole grid first so the skip lines print in grid order rather
+    # than arriving interleaved with completed cells.
+    pending = []
+    for task in tasks:
+        for variant in variants:
+            for repeat_idx in range(repeats):
+                cell = f"{task.id} × {variant.name}" + (f" #{repeat_idx}" if repeats > 1 else "")
+                if (task.id, variant.name, cfg.model, repeat_idx) in recorded:
+                    print(f"{cell}: skipped (already recorded)")
+                    continue
+                pending.append((task, variant, repeat_idx, cell))
+
+    cell_kwargs = dict(
+        snap=snap, work_root=work_root, tasks_dir=tasks_dir, cfg=cfg,
+        manifest=manifest, snapshot_provenance=snapshot_provenance,
+        judge_samples=judge_samples,
+    )
+    write_lock = threading.Lock()
+
     with results_path.open("a", encoding="utf-8") as out:
-        for task in tasks:
-            for variant in variants:
-                for repeat_idx in range(repeats):
-                    cell = f"{task.id} × {variant.name}" + (f" #{repeat_idx}" if repeats > 1 else "")
-                    if (task.id, variant.name, cfg.model, repeat_idx) in recorded:
-                        print(f"{cell}: skipped (already recorded)")
-                        continue
-                    run_dir = prepare_run_dir(
-                        snap, work_root, task, variant, tasks_dir, PROJECT_ROOT,
-                        repeat_idx=repeat_idx, model=cfg.model,
-                    )
-                    result = execute(task, variant, run_dir, cfg)
-                    result.setdefault("model", cfg.model)
-                    result["repeat_idx"] = repeat_idx
-                    result["work_root"] = str(work_root)
-                    result["snapshot"] = snapshot_provenance
-                    result["checks"] = run_checks(
-                        task.checks, run_dir, manifest, result.get("output_text", "")
-                    )
-                    try:
-                        _rmtree_force(run_dir)
-                    except OSError:
-                        print(f"warning: could not delete run dir {run_dir}")
-                    result["judge"] = (
-                        judge_output(
-                            result["output_text"], task.judge, cfg.judge_model, samples=judge_samples
-                        )
-                        if task.judge and not result["is_error"]
-                        else None
-                    )
-                    result["judge_cost_usd"] = result["judge"]["cost_usd"] if result["judge"] else None
-                    out.write(json.dumps(result) + "\n")
-                    out.flush()
-                    print(f"{cell}: "
-                          f"checks {sum(c['passed'] for c in result['checks'])}/{len(result['checks'])}"
-                          + (f", judge {result['judge']['score']}" if result["judge"] else ""))
+        def commit(result, lines):
+            # One lock covers the append, the flush and the cell's log together.
+            # The flush stays per row so an interrupted sweep is still resumable
+            # from what reached disk, and holding the lock across the print keeps
+            # a row on disk before the line claiming it appears.
+            with write_lock:
+                out.write(json.dumps(result) + "\n")
+                out.flush()
+                for line in lines:
+                    print(line)
+
+        if concurrency == 1:
+            # Kept deliberately separate from the pool path: serial runs stop at
+            # the first failure instead of paying for every cell already queued
+            # behind it, and that is the default.
+            for task, variant, repeat_idx, cell in pending:
+                commit(*_run_cell(task, variant, repeat_idx, cell, **cell_kwargs))
+        else:
+            with ThreadPoolExecutor(max_workers=concurrency) as pool:
+                futures = {
+                    pool.submit(_run_cell, task, variant, repeat_idx, cell, **cell_kwargs): cell
+                    for task, variant, repeat_idx, cell in pending
+                }
+                for fut in as_completed(futures):
+                    commit(*fut.result())
     print(f"results -> {results_path}")
     return 0
 
@@ -254,6 +321,10 @@ def main(argv: list[str] | None = None) -> int:
         "--judge-samples", type=int, default=1,
         help="judge calls per row, taking the median score (for a genuinely borderline rubric)",
     )
+    p_run.add_argument(
+        "--concurrency", type=int, default=1,
+        help="cells to run at once across the task × variant × repeat grid (default 1, serial)",
+    )
     p_report = sub.add_parser("report")
     p_report.add_argument("--label", required=True)
     p_compare = sub.add_parser("compare")
@@ -274,7 +345,7 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_run(
             cfg, args.label, args.variants, tasks_dir,
             repeats=args.repeats, legacy_model=default_model, retry_errors=args.retry_errors,
-            judge_samples=args.judge_samples,
+            judge_samples=args.judge_samples, concurrency=args.concurrency,
         )
     if args.command == "report":
         return cmd_report(cfg, args.label)
