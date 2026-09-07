@@ -41,6 +41,20 @@ def test_load_config_data_dir_expands_env_vars(tmp_path, monkeypatch):
     assert cfg.data_dir == tmp_path / "gauntlet-data"
 
 
+def test_load_config_data_dir_expands_posix_env_vars(tmp_path, monkeypatch):
+    # The %VAR% case above is what a Windows-authored config looks like. Both
+    # syntaxes have to resolve on every platform, or a config travels badly.
+    monkeypatch.setenv("GAUNTLET_TEST_BASE", str(tmp_path))
+    cfg = load_config(write_config(tmp_path, data_dir="$GAUNTLET_TEST_BASE/gauntlet-data"))
+    assert cfg.data_dir == tmp_path / "gauntlet-data"
+
+
+def test_load_config_data_dir_leaves_undefined_env_var_alone(tmp_path, monkeypatch):
+    monkeypatch.delenv("GAUNTLET_TEST_UNSET", raising=False)
+    cfg = load_config(write_config(tmp_path, data_dir="%GAUNTLET_TEST_UNSET%/gauntlet-data"))
+    assert cfg.data_dir == Path("%GAUNTLET_TEST_UNSET%/gauntlet-data")
+
+
 def test_load_config_missing_key_raises(tmp_path):
     p = tmp_path / "gauntlet.config.json"
     p.write_text(json.dumps({"model": "claude-fable-5"}), encoding="utf-8")
