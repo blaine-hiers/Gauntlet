@@ -362,3 +362,60 @@ def test_build_report_missing_variant_shows_na():
     assert "t1" not in verdicts
     # t2 should NOT appear either (empty < current)
     assert "t2" not in verdicts
+
+
+def _prow(task_id, variant, model, provider, kind, passes, judge_score):
+    r = result(task_id, variant, passes, judge_score)
+    r["model"] = model
+    r["provider"] = provider
+    r["provider_kind"] = kind
+    return r
+
+
+def test_compare_without_a_provider_field_reads_as_the_implicit_provider():
+    # Rows written before the provider axis existed must land in the cells they
+    # always did, and the report must look exactly as it did.
+    rows = []
+    for variant, passes, score in (("current", [True], 9), ("empty", [False], 3)):
+        r = result("t1", variant, passes, score)
+        r["model"] = "claude-opus-5"
+        rows.append(r)
+    md = build_compare(rows, run_labels=["r"])
+
+    assert "opus-5/current" in md            # no provider prefix on the columns
+    assert "claude/opus-5/current" not in md
+    assert "scaffold-confounded" not in md   # one kind, nothing to warn about
+    assert "## Verdicts (per model)" in md
+    assert "| claude |" in md                # but the column still names it
+
+
+def test_compare_across_provider_kinds_labels_the_rows_scaffold_confounded():
+    rows = [
+        _prow("t1", "current", "claude-opus-5", "claude", "claude-cli", [True], 9),
+        _prow("t1", "empty", "claude-opus-5", "claude", "claude-cli", [False], 3),
+        _prow("t1", "current", "qwen3", "local", "openai-compatible", [True], 5),
+        _prow("t1", "empty", "qwen3", "local", "openai-compatible", [True], 8),
+    ]
+    md = build_compare(rows, run_labels=["r"])
+
+    assert "scaffold-confounded" in md
+    assert "claude-cli" in md and "openai-compatible" in md
+    # The columns and the verdicts both carry the provider once there are two.
+    assert "local/qwen3/current" in md
+    assert "claude/opus-5/current" in md
+    assert "## Verdicts (per provider × model)" in md
+    verdicts = md[md.index("## Verdicts") :]
+    assert "**local/qwen3**" in verdicts and "**claude/opus-5**" in verdicts
+
+
+def test_two_providers_of_one_kind_are_not_called_scaffold_confounded():
+    # Same scaffold, two names. Comparing them is legitimate, so no warning.
+    rows = [
+        _prow("t1", "current", "claude-opus-5", "deep", "claude-cli", [True], 9),
+        _prow("t1", "empty", "claude-opus-5", "deep", "claude-cli", [False], 3),
+        _prow("t1", "current", "claude-haiku-4-5", "fast", "claude-cli", [True], 5),
+        _prow("t1", "empty", "claude-haiku-4-5", "fast", "claude-cli", [True], 8),
+    ]
+    md = build_compare(rows, run_labels=["r"])
+    assert "scaffold-confounded" not in md
+    assert "fast/haiku-4-5/current" in md

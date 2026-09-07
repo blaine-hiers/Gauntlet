@@ -1,6 +1,8 @@
 import math
 import statistics
 from collections import defaultdict
+
+from gauntlet.providers import DEFAULT_PROVIDER_NAME
 from dataclasses import dataclass
 
 
@@ -294,7 +296,11 @@ def _short_model(model: str) -> str:
 
 
 def build_compare(results: list[dict], run_labels: list[str], lint_reports: list = ()) -> str:
-    """Cross-model report: every result row must carry a 'model' key."""
+    """Cross-provider, cross-model report: every row must carry a 'model' key.
+
+    Rows written before the provider axis existed carry no 'provider'. They were
+    all produced by the Claude CLI, which is the implicit provider's name, so
+    they land in the cells they always did instead of forming a second axis."""
     lines = [f"# Gauntlet Model Comparison — {', '.join(run_labels)}", ""]
     labels = sorted({r["label"] for r in results if r.get("label")}) or list(run_labels)
     if len(labels) > 1:
@@ -306,27 +312,52 @@ def build_compare(results: list[dict], run_labels: list[str], lint_reports: list
             "",
         ]
 
-    models = sorted({r["model"] for r in results})
-    by_cell = defaultdict(list)  # (model, variant) -> rows
+    def _prov(r):
+        return r.get("provider", DEFAULT_PROVIDER_NAME)
+
+    providers_seen = sorted({_prov(r) for r in results})
+    multi_provider = len(providers_seen) > 1
+    kinds = sorted({r["provider_kind"] for r in results if r.get("provider_kind")})
+    if len(kinds) > 1:
+        # Put this where the numbers are rather than in a footnote. Our tool loop
+        # and Claude Code are not the same agent, so an absolute gap between two
+        # providers measures the scaffolds at least as much as the models.
+        lines += [
+            f"**Cross-provider rows are scaffold-confounded.** These results span "
+            f"{len(kinds)} provider kinds ({', '.join(kinds)}). One tool loop is not "
+            f"another, so a difference *between* providers is not a model comparison. "
+            f"The defensible reading is within a single provider: its own CLAUDE.md "
+            f"variants against each other.",
+            "",
+        ]
+
+    combos = sorted({(_prov(r), r["model"]) for r in results})
+    by_cell = defaultdict(list)  # (provider, model, variant) -> rows
     for r in results:
-        by_cell[(r["model"], r["variant"])].append(r)
+        by_cell[(_prov(r), r["model"], r["variant"])].append(r)
     pairs = sorted(by_cell)
 
     lines += [
-        "## Summary (model × variant)",
+        "## Summary (provider × model × variant)",
         "",
-        "| Model | Variant | Runs | Errors | Check pass rate | Mean judge score | Degraded judge | "
-        "Total cost (USD) | Judge cost (USD) | Score/$ | Score/turn |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        "| Provider | Model | Variant | Runs | Errors | Check pass rate | Mean judge score | "
+        "Degraded judge | Total cost (USD) | Judge cost (USD) | Score/$ | Score/turn |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
-    for model, variant in pairs:
-        s = _summary_cells(by_cell[(model, variant)])
+    for provider, model, variant in pairs:
+        s = _summary_cells(by_cell[(provider, model, variant)])
         lines.append(
-            f"| {_short_model(model)} | {variant} | {s.runs} | {s.errors} | {s.pass_rate} | {s.mean_judge} | "
+            f"| {provider} | {_short_model(model)} | {variant} | {s.runs} | {s.errors} | "
+            f"{s.pass_rate} | {s.mean_judge} | "
             f"{s.degraded} | {s.cost:.2f} | {s.judge_cost:.2f} | {s.score_per_dollar} | {s.score_per_turn} |"
         )
 
-    col_names = [f"{_short_model(m)}/{v}" for m, v in pairs]
+    # The provider enters the column label only when there is more than one, so a
+    # single-provider report reads exactly as it did before this axis existed.
+    col_names = [
+        (f"{p}/{_short_model(m)}/{v}" if multi_provider else f"{_short_model(m)}/{v}")
+        for p, m, v in pairs
+    ]
     lines += [
         "",
         "## Per-Task Matrix (composite score 0–1)",
@@ -334,20 +365,31 @@ def build_compare(results: list[dict], run_labels: list[str], lint_reports: list
         "| Task | Category | " + " | ".join(col_names) + " |",
         "|---" * (2 + len(pairs)) + "|",
     ]
-    by_task, attempted, categories = _cells(results, key=lambda r: (r["model"], r["variant"]))
+    by_task, attempted, categories = _cells(
+        results, key=lambda r: (_prov(r), r["model"], r["variant"])
+    )
     for task_id in sorted(categories):
         cells = by_task.get(task_id, {})
         row = " | ".join(_fmt_cell(cells[p]) if p in cells else "n/a" for p in pairs)
         lines.append(f"| {task_id} | {categories[task_id]} | {row} |")
 
-    lines += _category_section(results, key=lambda r: (_short_model(r["model"]), r["variant"]))
+    lines += _category_section(
+        results,
+        key=lambda r: (
+            f"{_prov(r)}/{_short_model(r['model'])}" if multi_provider else _short_model(r["model"]),
+            r["variant"],
+        ),
+    )
 
-    lines += ["", "## Verdicts (per model)", "", VERDICT_RULE, ""]
-    for model in models:
+    verdict_heading = (
+        "## Verdicts (per provider × model)" if multi_provider else "## Verdicts (per model)"
+    )
+    lines += ["", verdict_heading, "", VERDICT_RULE, ""]
+    for provider, model in combos:
         flagged, comparable, incomparable = _split_verdicts(
-            by_task, attempted, (model, "current"), (model, "empty")
+            by_task, attempted, (provider, model, "current"), (provider, model, "empty")
         )
-        name = _short_model(model)
+        name = f"{provider}/{_short_model(model)}" if multi_provider else _short_model(model)
         if not comparable and not incomparable:
             lines.append(f"- **{name}**: no current/empty pairs to compare")
         elif flagged:

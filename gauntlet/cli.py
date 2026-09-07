@@ -16,6 +16,7 @@ if hasattr(sys.stdout, "reconfigure"):
 from gauntlet.config import Config, load_config
 from gauntlet.judge import judge_output
 from gauntlet.lint import lint_claude_md
+from gauntlet.providers import DEFAULT_PROVIDER_NAME, resolve_providers
 from gauntlet.report import build_compare, build_report
 from gauntlet.runner import ancestor_context_files, execute, prepare_run_dir
 from gauntlet.scoring import run_checks
@@ -66,6 +67,7 @@ def cmd_lint(cfg: Config) -> int:
 
 
 def _run_cell(
+    provider,
     task,
     variant,
     repeat_idx: int,
@@ -88,10 +90,13 @@ def _run_cell(
     lines: list[str] = []
     run_dir = prepare_run_dir(
         snap, work_root, task, variant, tasks_dir, PROJECT_ROOT,
-        repeat_idx=repeat_idx, model=cfg.model, log=lines.append,
+        repeat_idx=repeat_idx, model=provider.model, provider=provider.name,
+        log=lines.append,
     )
-    result = execute(task, variant, run_dir, cfg)
-    result.setdefault("model", cfg.model)
+    result = provider.run(task, variant, run_dir)
+    result.setdefault("model", provider.model)
+    result.setdefault("provider", provider.name)
+    result.setdefault("provider_kind", provider.kind)
     result["repeat_idx"] = repeat_idx
     result["work_root"] = str(work_root)
     result["snapshot"] = snapshot_provenance
@@ -194,23 +199,44 @@ def cmd_run(
                 row = json.loads(line)
                 if retry_errors and row.get("is_error"):
                     continue
-                recorded.add(
-                    (row["task_id"], row["variant"], row.get("model", legacy_model), row.get("repeat_idx", 0))
-                )
+                recorded.add((
+                    row["task_id"],
+                    row["variant"],
+                    row.get("model", legacy_model),
+                    row.get("repeat_idx", 0),
+                    # Rows predating the provider axis were all produced by the
+                    # Claude CLI, which is the implicit provider's name, so they
+                    # resume against it rather than looking like a new cell.
+                    row.get("provider", DEFAULT_PROVIDER_NAME),
+                ))
             except (json.JSONDecodeError, KeyError):
                 pass
+
+    # `execute` is passed by name so the module binding stays the one seam a
+    # caller (or a test) can stub, rather than each provider reaching past it.
+    try:
+        providers = resolve_providers(cfg, execute_fn=execute)
+    except ValueError as e:
+        print(str(e))
+        return 1
 
     # Resolve the whole grid first so the skip lines print in grid order rather
     # than arriving interleaved with completed cells.
     pending = []
-    for task in tasks:
-        for variant in variants:
-            for repeat_idx in range(repeats):
-                cell = f"{task.id} × {variant.name}" + (f" #{repeat_idx}" if repeats > 1 else "")
-                if (task.id, variant.name, cfg.model, repeat_idx) in recorded:
-                    print(f"{cell}: skipped (already recorded)")
-                    continue
-                pending.append((task, variant, repeat_idx, cell))
+    for provider in providers:
+        for task in tasks:
+            for variant in variants:
+                for repeat_idx in range(repeats):
+                    cell = f"{task.id} × {variant.name}"
+                    if len(providers) > 1:
+                        cell = f"{provider.name}/{cell}"
+                    if repeats > 1:
+                        cell += f" #{repeat_idx}"
+                    key = (task.id, variant.name, provider.model, repeat_idx, provider.name)
+                    if key in recorded:
+                        print(f"{cell}: skipped (already recorded)")
+                        continue
+                    pending.append((provider, task, variant, repeat_idx, cell))
 
     cell_kwargs = dict(
         snap=snap, work_root=work_root, tasks_dir=tasks_dir, cfg=cfg,
@@ -235,13 +261,15 @@ def cmd_run(
             # Kept deliberately separate from the pool path: serial runs stop at
             # the first failure instead of paying for every cell already queued
             # behind it, and that is the default.
-            for task, variant, repeat_idx, cell in pending:
-                commit(*_run_cell(task, variant, repeat_idx, cell, **cell_kwargs))
+            for provider, task, variant, repeat_idx, cell in pending:
+                commit(*_run_cell(provider, task, variant, repeat_idx, cell, **cell_kwargs))
         else:
             with ThreadPoolExecutor(max_workers=concurrency) as pool:
                 futures = {
-                    pool.submit(_run_cell, task, variant, repeat_idx, cell, **cell_kwargs): cell
-                    for task, variant, repeat_idx, cell in pending
+                    pool.submit(
+                        _run_cell, provider, task, variant, repeat_idx, cell, **cell_kwargs
+                    ): cell
+                    for provider, task, variant, repeat_idx, cell in pending
                 }
                 for fut in as_completed(futures):
                     commit(*fut.result())

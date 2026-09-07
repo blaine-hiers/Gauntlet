@@ -419,3 +419,63 @@ def test_run_rejects_concurrency_below_one(fake_framework, tmp_path, monkeypatch
     _project_with_one_task(tmp_path, monkeypatch, fake_framework)
     assert cli.main(["run", "--label", "Z", "--concurrency", "0"]) == 1
     assert "--concurrency must be at least 1" in capsys.readouterr().out
+
+
+def test_run_fans_out_over_configured_providers(fake_framework, tmp_path, monkeypatch):
+    project_root = _project_with_one_task(tmp_path, monkeypatch, fake_framework)
+    cfg = dataclasses.replace(fake_cfg(fake_framework), providers={
+        "fast": {"model": "claude-haiku-4-5"},
+        "deep": {"model": "claude-opus-5"},
+    })
+    monkeypatch.setattr(cli, "load_project_config", lambda: cfg)
+
+    seen_dirs = []
+
+    def fake_execute(task, variant, run_dir, config):
+        seen_dirs.append(str(run_dir))
+        return {
+            "task_id": task.id, "category": task.category, "variant": variant.name,
+            "model": config.model, "duration_s": 1.0, "cost_usd": 0.01,
+            "output_text": "Alpha is on track", "exit_code": 0, "is_error": False,
+        }
+
+    monkeypatch.setattr(cli, "execute", fake_execute)
+
+    assert cli.main(["run", "--label", "P"]) == 0
+    rows = _rows(project_root, "P")
+    # 2 providers x 1 task x 2 variants
+    assert len(rows) == 4
+    assert {r["provider"] for r in rows} == {"fast", "deep"}
+    assert {r["model"] for r in rows} == {"claude-haiku-4-5", "claude-opus-5"}
+    # Two providers must never share a run directory, or one would be scored
+    # against the other's leftovers.
+    assert len(set(seen_dirs)) == 4
+
+
+def test_run_resume_key_is_provider_aware(fake_framework, tmp_path, monkeypatch):
+    project_root = _project_with_one_task(tmp_path, monkeypatch, fake_framework)
+    assert cli.main(["run", "--label", "PR"]) == 0
+    assert len(_rows(project_root, "PR")) == 2
+
+    # Rows already on disk carry provider "claude" (the implicit name), so a
+    # re-run under the same implicit provider adds nothing.
+    assert cli.main(["run", "--label", "PR"]) == 0
+    assert len(_rows(project_root, "PR")) == 2
+
+    # A differently *named* provider on the same model is a genuinely new cell.
+    cfg = dataclasses.replace(fake_cfg(fake_framework), providers={"deep": {}})
+    monkeypatch.setattr(cli, "load_project_config", lambda: cfg)
+    assert cli.main(["run", "--label", "PR"]) == 0
+    rows = _rows(project_root, "PR")
+    assert len(rows) == 4
+    assert {r.get("provider") for r in rows} == {"claude", "deep"}
+
+
+def test_run_rejects_an_unknown_provider_kind(fake_framework, tmp_path, monkeypatch, capsys):
+    _project_with_one_task(tmp_path, monkeypatch, fake_framework)
+    cfg = dataclasses.replace(
+        fake_cfg(fake_framework), providers={"local": {"kind": "openai-compatible"}}
+    )
+    monkeypatch.setattr(cli, "load_project_config", lambda: cfg)
+    assert cli.main(["run", "--label", "U"]) == 1
+    assert "unknown kind" in capsys.readouterr().out

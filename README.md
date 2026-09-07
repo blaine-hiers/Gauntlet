@@ -212,6 +212,46 @@ base for real numbers.
 Re-run under a new label whenever a model ships or the context file changes
 materially, then `compare`. That is the workflow the harness exists for.
 
+## Providers
+
+The thing that executes a task is an axis of the comparison, not a fixed
+dependency, so it sits behind an interface. `AgentProvider` takes a task and a
+prepared run directory and returns a result row; `ClaudeCliProvider` is today's
+behaviour unchanged.
+
+An optional `providers` map in the config names them:
+
+```json
+"providers": {
+  "fast": { "model": "claude-haiku-4-5" },
+  "deep": { "kind": "claude-cli", "model": "claude-opus-5" }
+}
+```
+
+**Leaving the key out means one implicit Claude provider on `model`**, which is
+what every config written before this existed describes, so nothing has to
+change and `--model` keeps overriding exactly as it did. A provider with no
+`model` of its own inherits that default. An unknown `kind` is a hard error
+rather than a skip: dropping it quietly would produce a report that looks
+complete while missing an axis the config asked for.
+
+Runs fan out over providers, and the run-directory hash includes the provider
+name, so two providers can never score each other's leftovers.
+
+### Cross-provider numbers are labelled, not just printed
+
+When results span more than one provider **kind**, the report says so above the
+tables: a tool loop is not another tool loop, so an absolute gap between two
+providers measures the scaffolds at least as much as the models. The defensible
+reading is within one provider, comparing its own CLAUDE.md variants. Two
+providers of the *same* kind (two Claude models, say) carry no such warning,
+because that comparison is legitimate.
+
+**Not built yet:** the OpenAI-compatible provider that would let a self-hosted
+model take the same tasks. It needs a tool loop, a path jail confined to the run
+directory, and token accounting that reports `local` rather than a flattering
+`$0.00` next to Claude's real spend. It also needs an endpoint to build against.
+
 ## Corpus handling
 
 The snapshot copier tolerates what breaks a naive `shutil.copytree` on a real
@@ -223,7 +263,7 @@ produces confident numbers about the wrong thing.
 ## Layout
 
 ```
-gauntlet/       cli, snapshot, runner, judge, scoring, lint, report
+gauntlet/       cli, snapshot, runner, providers, judge, scoring, lint, report
 tasks/          golden tasks in YAML, plus one skeleton per category
 corpus/         bundled demo knowledge base
 variants/       CLAUDE.md replacements for A/B runs
