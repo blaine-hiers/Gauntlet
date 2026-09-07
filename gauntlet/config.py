@@ -1,7 +1,20 @@
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
+
+# os.path.expandvars only understands %VAR% on Windows. A config written there and
+# run on Linux or macOS therefore does not fail: it silently yields a literal
+# "%VAR%" path segment and the harness creates a directory by that name, which is
+# the worst shape a portability bug can take. Expand both syntaxes everywhere.
+# An undefined variable is left as written, matching os.path.expandvars.
+_WINDOWS_VAR = re.compile(r"%([A-Za-z_][A-Za-z0-9_]*)%")
+
+
+def _expand(value: str) -> str:
+    value = os.path.expandvars(value)
+    return _WINDOWS_VAR.sub(lambda m: os.environ.get(m.group(1), m.group(0)), value)
 
 
 @dataclass(frozen=True)
@@ -31,7 +44,7 @@ class Config:
 
 
 def _optional_path(raw: dict, key: str) -> Path | None:
-    return Path(os.path.expandvars(raw[key])).expanduser() if raw.get(key) else None
+    return Path(_expand(raw[key])).expanduser() if raw.get(key) else None
 
 
 def load_config(path: Path) -> Config:
