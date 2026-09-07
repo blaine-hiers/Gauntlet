@@ -36,6 +36,11 @@ class Config:
     # harness itself lives inside a synced library, so its 300MB+ snapshot of that
     # library never lands back in the library (recursion + sync bloat).
     data_dir: Path | None = None
+    # Named agent providers, as {name: {kind, model}}. None or empty means one
+    # implicit Claude provider on `model` above, which is what every config
+    # written before this axis existed describes. `model` and --model keep
+    # working either way; they supply the default a provider inherits.
+    providers: dict | None = None
     # Where per-run scratch directories are created. None = the system temp dir.
     # Set this when the temp dir sits under a directory holding a CLAUDE.md —
     # on Windows it lives under the user's home, so ~/.claude/CLAUDE.md would be
@@ -61,6 +66,7 @@ def load_config(path: Path) -> Config:
         timeout_s=raw.get("timeout_s", 900),
         exclude=raw.get("exclude", []),
         variants=variants,
+        providers=raw.get("providers") or None,
         data_dir=_optional_path(raw, "data_dir"),
         work_root=_optional_path(raw, "work_root"),
     )
