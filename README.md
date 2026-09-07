@@ -183,9 +183,23 @@ python -m gauntlet.cli snapshot                        # freeze the corpus
 python -m gauntlet.cli lint                            # static findings on CLAUDE.md
 python -m gauntlet.cli run --label baseline            # every task, every variant
 python -m gauntlet.cli run --label baseline --repeats 5  # five samples per cell
+python -m gauntlet.cli run --label baseline --concurrency 4  # four cells at once
 python -m gauntlet.cli report --label baseline         # scored markdown report
 python -m gauntlet.cli compare --labels a,b            # diff two labelled runs
 ```
+
+Twelve cells at up to 900 seconds each is a long serial wait, and `--repeats`
+multiplies it. `--concurrency N` runs N cells at once; the default is 1, so
+serial stays the default and nothing changes unless you ask for it. Run
+directories are already named by a hash of task, variant, model and repeat, so
+parallel cells cannot collide, and the append to `results.jsonl` is locked and
+still flushed per row, so an interrupted sweep resumes from exactly what reached
+disk. Each cell's console output is buffered and emitted in one piece rather
+than interleaved with its neighbours.
+
+The serial path is kept deliberately separate from the pool: at `--concurrency 1`
+a failing cell stops the run instead of paying for every cell already queued
+behind it.
 
 `run` also takes `--variants`, `--tasks-dir`, `--model` to override the
 configured model for one run, `--judge-samples` to median several judge calls

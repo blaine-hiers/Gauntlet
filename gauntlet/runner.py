@@ -52,6 +52,7 @@ def prepare_run_dir(
     project_root: Path,
     repeat_idx: int = 0,
     model: str = "",
+    log=print,
 ) -> Path:
     # Short hashed dir name: Windows caps paths at 260 chars, and deep framework
     # trees only fit if the run-dir prefix stays shorter than the snapshot's own.
@@ -63,7 +64,7 @@ def prepare_run_dir(
     run_dir = work_root / name
     skipped = copy_tree_tolerant(snapshot_dir, run_dir, exclude=[])
     if skipped:
-        print(f"{task.id} × {variant.name}: run copy skipped {len(skipped)} file(s)")
+        log(f"{task.id} × {variant.name}: run copy skipped {len(skipped)} file(s)")
 
     claude_md = run_dir / "CLAUDE.md"
     if variant.claude_md == "":

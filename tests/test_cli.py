@@ -1,6 +1,8 @@
 import dataclasses
 import json
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 from gauntlet import cli
@@ -355,3 +357,65 @@ def test_run_rejects_unknown_variant(fake_framework, tmp_path, monkeypatch):
     assert cli.main(["run", "--label", "x", "--variants", "bogus"]) == 1
     results_path = project_root / "data" / "runs" / "x" / "results.jsonl"
     assert not results_path.exists()
+
+
+def test_run_concurrency_lands_every_cell_exactly_once(fake_framework, tmp_path, monkeypatch):
+    # The whole risk of --concurrency is a cell writing twice or not at all:
+    # the grid fans out, the rows come back interleaved, and results.jsonl is a
+    # shared append. Stub the executor so the grid is the only thing under test.
+    project_root = _project_with_one_task(tmp_path, monkeypatch, fake_framework)
+
+    calls = []
+    live = {"now": 0, "peak": 0}
+    lock = threading.Lock()
+
+    def fake_execute(task, variant, run_dir, cfg):
+        with lock:
+            live["now"] += 1
+            live["peak"] = max(live["peak"], live["now"])
+        time.sleep(0.02)  # long enough that the pool actually overlaps cells
+        with lock:
+            live["now"] -= 1
+            calls.append((task.id, variant.name))
+        return {
+            "task_id": task.id, "category": task.category, "variant": variant.name,
+            "model": cfg.model, "duration_s": 1.0, "cost_usd": 0.01,
+            "output_text": "Alpha is on track", "exit_code": 0, "is_error": False,
+        }
+
+    monkeypatch.setattr(cli, "execute", fake_execute)
+
+    assert cli.main(["run", "--label", "C", "--repeats", "3", "--concurrency", "4"]) == 0
+
+    rows = _rows(project_root, "C")
+    keys = [(r["task_id"], r["variant"], r["model"], r["repeat_idx"]) for r in rows]
+    # 1 task x 2 variants x 3 repeats, each written exactly once.
+    assert len(rows) == 6
+    assert len(set(keys)) == 6
+    assert sorted(k[3] for k in keys) == [0, 0, 1, 1, 2, 2]
+    assert len(calls) == 6
+    # If this is 1 the pool never overlapped and the test proved nothing.
+    assert live["peak"] > 1
+
+    # Every row is intact JSON: a torn line is what an unguarded concurrent
+    # append produces, and it would still parse as "some" rows without this.
+    jsonl = project_root / "data" / "runs" / "C" / "results.jsonl"
+    lines = jsonl.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 6
+    for line in lines:
+        json.loads(line)
+
+
+def test_run_concurrency_still_resumes(fake_framework, tmp_path, monkeypatch):
+    project_root = _project_with_one_task(tmp_path, monkeypatch, fake_framework)
+    assert cli.main(["run", "--label", "R", "--repeats", "2", "--concurrency", "3"]) == 0
+    assert len(_rows(project_root, "R")) == 4
+    # Same grid again adds nothing: the resume key is unchanged by fan-out.
+    assert cli.main(["run", "--label", "R", "--repeats", "2", "--concurrency", "3"]) == 0
+    assert len(_rows(project_root, "R")) == 4
+
+
+def test_run_rejects_concurrency_below_one(fake_framework, tmp_path, monkeypatch, capsys):
+    _project_with_one_task(tmp_path, monkeypatch, fake_framework)
+    assert cli.main(["run", "--label", "Z", "--concurrency", "0"]) == 1
+    assert "--concurrency must be at least 1" in capsys.readouterr().out
