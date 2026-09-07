@@ -17,7 +17,12 @@ from gauntlet.lint import lint_claude_md
 from gauntlet.report import build_compare, build_report
 from gauntlet.runner import ancestor_context_files, execute, prepare_run_dir
 from gauntlet.scoring import run_checks
-from gauntlet.snapshot import _rmtree_force, load_manifest, make_snapshot
+from gauntlet.snapshot import (
+    _rmtree_force,
+    load_manifest,
+    load_snapshot_provenance,
+    make_snapshot,
+)
 from gauntlet.tasks import load_tasks
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -66,6 +71,7 @@ def cmd_run(
     repeats: int = 1,
     legacy_model: str | None = None,
     retry_errors: bool = False,
+    judge_samples: int = 1,
 ) -> int:
     """`legacy_model` is the config's default model *before* any --model override:
     rows written before the model field existed were produced under it, so that
@@ -84,6 +90,7 @@ def cmd_run(
         print(f"tasks directory not found: {tasks_dir}")
         return 1
     manifest = load_manifest(snap)
+    snapshot_provenance = load_snapshot_provenance(snap)
     tasks = load_tasks(tasks_dir)
     if not tasks:
         print(f"no tasks found in {tasks_dir}")
@@ -150,16 +157,22 @@ def cmd_run(
                     result.setdefault("model", cfg.model)
                     result["repeat_idx"] = repeat_idx
                     result["work_root"] = str(work_root)
-                    result["checks"] = run_checks(task.checks, run_dir, manifest)
+                    result["snapshot"] = snapshot_provenance
+                    result["checks"] = run_checks(
+                        task.checks, run_dir, manifest, result.get("output_text", "")
+                    )
                     try:
                         _rmtree_force(run_dir)
                     except OSError:
                         print(f"warning: could not delete run dir {run_dir}")
                     result["judge"] = (
-                        judge_output(result["output_text"], task.judge, cfg.judge_model)
+                        judge_output(
+                            result["output_text"], task.judge, cfg.judge_model, samples=judge_samples
+                        )
                         if task.judge and not result["is_error"]
                         else None
                     )
+                    result["judge_cost_usd"] = result["judge"]["cost_usd"] if result["judge"] else None
                     out.write(json.dumps(result) + "\n")
                     out.flush()
                     print(f"{cell}: "
@@ -237,6 +250,10 @@ def main(argv: list[str] | None = None) -> int:
         "--retry-errors", action="store_true",
         help="re-run cells whose recorded row errored (timeout, crash) instead of skipping them",
     )
+    p_run.add_argument(
+        "--judge-samples", type=int, default=1,
+        help="judge calls per row, taking the median score (for a genuinely borderline rubric)",
+    )
     p_report = sub.add_parser("report")
     p_report.add_argument("--label", required=True)
     p_compare = sub.add_parser("compare")
@@ -257,6 +274,7 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_run(
             cfg, args.label, args.variants, tasks_dir,
             repeats=args.repeats, legacy_model=default_model, retry_errors=args.retry_errors,
+            judge_samples=args.judge_samples,
         )
     if args.command == "report":
         return cmd_report(cfg, args.label)

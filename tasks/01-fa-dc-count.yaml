@@ -4,6 +4,9 @@ prompt: "How many distribution centers does Meridian Tools operate today, and wh
 checks:
   - type: file_unchanged        # a lookup must not modify anything
     path: "QUICK ANSWERS - Meridian Fact Index.md"
+  - type: file_not_contains     # assert the Jacksonville trap deterministically, not just via the judge
+    path: "$response"
+    text: "Jacksonville"
 judge:
   rubric: "The answer must state there are THREE distribution centers today and name them: Ashgrove TN, Baytown TX, and Cordell OK. Noting that a Fairview NC site arrives with the Whitlock acquisition is a plus, not required. The answer must NOT claim a Jacksonville DC exists (it is a sales office), must not confuse the five distribution LLCs with physical DCs, and must not invent additional locations."
   answer_key: "THREE physical DCs: Ashgrove TN, Baytown TX, Cordell OK. Fairview NC arrives with the Whitlock acquisition. Five distribution LLCs exist but only three have buildings; there is no Jacksonville DC."

@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import stat
+from datetime import datetime, timezone
 from fnmatch import fnmatch
 from pathlib import Path
 
@@ -27,6 +28,10 @@ def sha256_file(p: Path) -> str:
 
 def _manifest_path(dest: Path) -> Path:
     return dest.parent / f"{dest.name}.manifest.json"
+
+
+def _provenance_path(dest: Path) -> Path:
+    return dest.parent / f"{dest.name}.provenance.json"
 
 
 def copy_tree_tolerant(src: Path, dest: Path, exclude: list[str]) -> list[str]:
@@ -70,8 +75,28 @@ def make_snapshot(synced_root: Path, dest: Path, exclude: list[str]) -> dict[str
         if f.is_file()
     }
     _manifest_path(dest).write_text(json.dumps(manifest, indent=1), encoding="utf-8")
+
+    # Provenance so runs from different weeks are known to be comparable (or
+    # known not to be): where the snapshot came from, when, how many files,
+    # and a hash of the manifest content itself so two snapshots of the same
+    # source at different times are distinguishable even if the file count matches.
+    manifest_hash = hashlib.sha256(
+        json.dumps(manifest, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    provenance = {
+        "source_root": str(synced_root),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "file_count": len(manifest),
+        "manifest_hash": manifest_hash,
+    }
+    _provenance_path(dest).write_text(json.dumps(provenance, indent=1), encoding="utf-8")
     return manifest
 
 
 def load_manifest(dest: Path) -> dict[str, str]:
     return json.loads(_manifest_path(dest).read_text(encoding="utf-8"))
+
+
+def load_snapshot_provenance(dest: Path) -> dict | None:
+    p = _provenance_path(dest)
+    return json.loads(p.read_text(encoding="utf-8")) if p.is_file() else None

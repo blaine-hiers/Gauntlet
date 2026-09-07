@@ -29,13 +29,21 @@ whether it complies, and they are not the same number.
 
 ### Every task carries two independent gates
 
-**Deterministic checks** run against the filesystem after the model finishes:
-`file_exists`, `file_not_exists`, `file_contains`, `file_unchanged`. These
-cannot be argued with by anyone, including the judge.
+**Deterministic checks** run after the model finishes, against the filesystem
+and, via `path: "$response"`, against the model's own answer: `file_exists`,
+`file_not_exists`, `file_contains`, `file_not_contains`, `file_matches`,
+`file_unchanged`, `snapshot_unchanged`. These cannot be argued with by anyone,
+including the judge.
 
-`file_unchanged` is the useful one. It hashes the file before and after, which
-is how a read-only task proves it actually stayed read-only rather than
-reporting that it did.
+The negative ones earn their keep. `file_unchanged` hashes a path before and
+after, so a read-only task proves it stayed read-only rather than reporting
+that it did. `snapshot_unchanged` widens that to the entire run directory and
+names every path that drifted, which measures blast radius instead of trusting
+that nothing else was touched.
+
+`$response` is rejected for `file_exists`, `file_not_exists` and
+`file_unchanged`: asking whether the model's answer exists on disk is a
+question with no honest answer.
 
 **An LLM judge** scores 0 to 10 against a rubric *and an answer key*. The rubric
 names the specific traps, so a plausible-sounding wrong answer scores badly
@@ -55,6 +63,15 @@ judge:
 
 Without an answer key you are asking one model whether another model sounded
 convincing. That is a vibe, not a measurement.
+
+The judge is itself a stochastic call, so two of its failure modes are handled
+rather than hoped away. `--judge-samples K` grades each row K times and takes
+the median, for rubrics genuinely close to the line. An unparseable reply is
+retried once, on unparseable output only and never on a timeout, because
+retrying a timeout buys a second bill for the same answer. If it still cannot
+be parsed the row scores `None` and appears under **Degraded Judge Rows**
+instead of vanishing from the mean, and the raw reply is kept on every row for
+audit.
 
 A task needs at least one of the two gates. Four categories are valid:
 `find-answer`, `file-organize`, `draft-deliverable`, `framework-upkeep`.
@@ -140,13 +157,22 @@ correction history is asking for trust it has not earned.
 
 A markdown report in three parts:
 
-- **Variant summary**: check pass rate, mean judge score, and total cost in USD
-  per variant. Cost is tracked because "the longer context scored slightly
-  better" is a different conclusion when it also cost four times as much.
+- **Variant summary**: check pass rate, mean judge score, total cost in USD, and
+  the efficiency pair **Score/$** and **Score/turn**. Cost is tracked because
+  "the longer context scored slightly better" is a different conclusion when it
+  also cost four times as much. Both ratios are sum over sum rather than mean
+  over sum, computed across one consistent row set, so a row missing its
+  denominator is skipped instead of quietly inflating the number.
 - **Per-task matrix**: every task against every variant as mean and standard
-  deviation, so one regression is visible instead of averaged away.
+  deviation, so one regression is visible instead of averaged away, with a
+  per-category breakdown underneath.
+- **Degraded Judge Rows**: every row whose judge output could not be parsed,
+  listed rather than omitted, so a thin mean is visibly thin.
 - **Verdicts**: tasks where `empty` beat `current` by more than the standard
   error of the difference. That list is the point of the whole exercise.
+
+Each report also records the provenance of the snapshot it scored, so a number
+can be traced back to the corpus that produced it.
 
 ## Running it
 
@@ -162,7 +188,8 @@ python -m gauntlet.cli compare --labels a,b            # diff two labelled runs
 ```
 
 `run` also takes `--variants`, `--tasks-dir`, `--model` to override the
-configured model for one run, and `--retry-errors`.
+configured model for one run, `--judge-samples` to median several judge calls
+per row, and `--retry-errors`.
 
 `gauntlet.config.json` ships pointed at the bundled demo corpus, so a clean
 clone runs end to end with no setup. Point `synced_root` at a real knowledge
