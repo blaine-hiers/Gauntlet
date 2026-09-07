@@ -184,6 +184,7 @@ python -m gauntlet.cli lint                            # static findings on CLAU
 python -m gauntlet.cli run --label baseline            # every task, every variant
 python -m gauntlet.cli run --label baseline --repeats 5  # five samples per cell
 python -m gauntlet.cli run --label baseline --concurrency 4  # four cells at once
+python -m gauntlet.cli ablate --label ablation-1       # one variant per section
 python -m gauntlet.cli report --label baseline         # scored markdown report
 python -m gauntlet.cli compare --labels a,b            # diff two labelled runs
 ```
@@ -211,6 +212,38 @@ base for real numbers.
 
 Re-run under a new label whenever a model ships or the context file changes
 materially, then `compare`. That is the workflow the harness exists for.
+
+## Section ablation
+
+The whole-file A/B answers "is this context file worth having". It cannot answer
+"which half of it is dead weight", and `lint` only scores sections statically, by
+counting tokens and imperatives, which measures size and tone rather than effect.
+
+`ablate` closes that gap. It decomposes the snapshot's CLAUDE.md, writes one
+synthetic variant per section removed (`minus-<slug>`), runs the same golden
+tasks against the same frozen corpus, and reports the delta.
+
+```bash
+python -m gauntlet.cli ablate --label ablation-1 --repeats 5 --concurrency 4
+```
+
+**A section runs from its heading to the next heading at the same or a shallower
+level**, so removing a `##` takes its `###` children with it. That is the part
+worth getting right: `lint`'s splitter is flat, and reusing it would have
+orphaned the children and then scored a file nobody asked for. `--max-depth`
+caps what is offered, defaulting to 2, because every level multiplies the grid
+and a `####` is rarely a unit anyone would delete on its own.
+
+The report puts the static lint columns next to the measured delta on one row.
+A section that lints as large and turns out to change nothing is the finding
+worth acting on, and it is only visible when both numbers sit together. `No harm`
+counts tasks where the ablated file matched or beat the full one **by more than
+the standard error of the difference**, the same gate the whole-file verdicts
+use, so a single sample can never produce a cut recommendation.
+
+`sections × variants × tasks × repeats` grows fast and every cell is a paid call,
+so the planned cell count is printed before anything runs and a grid past
+`--threshold` asks for confirmation. With no usable stdin the answer is no.
 
 ## Providers
 
@@ -263,7 +296,7 @@ produces confident numbers about the wrong thing.
 ## Layout
 
 ```
-gauntlet/       cli, snapshot, runner, providers, judge, scoring, lint, report
+gauntlet/       cli, snapshot, runner, providers, judge, scoring, lint, ablate, report
 tasks/          golden tasks in YAML, plus one skeleton per category
 corpus/         bundled demo knowledge base
 variants/       CLAUDE.md replacements for A/B runs

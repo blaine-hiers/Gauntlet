@@ -479,3 +479,66 @@ def test_run_rejects_an_unknown_provider_kind(fake_framework, tmp_path, monkeypa
     monkeypatch.setattr(cli, "load_project_config", lambda: cfg)
     assert cli.main(["run", "--label", "U"]) == 1
     assert "unknown kind" in capsys.readouterr().out
+
+
+def test_ablate_generates_a_variant_per_section_and_reports_deltas(
+    fake_framework, tmp_path, monkeypatch
+):
+    project_root = _project_with_one_task(tmp_path, monkeypatch, fake_framework)
+
+    assert cli.main(["ablate", "--label", "A", "--yes"]) == 0
+
+    out_dir = project_root / "data" / "runs" / "A"
+    written = sorted(p.name for p in (out_dir / "ablation-variants").iterdir())
+    assert written == [
+        "minus-filing.md", "minus-framework-rules.md", "minus-ghost-section.md",
+    ]
+    # Removing a ## takes only its own span.
+    filing = (out_dir / "ablation-variants" / "minus-filing.md").read_text(encoding="utf-8")
+    assert "## Filing" not in filing and "## Ghost Section" in filing
+    # The single top-level heading spans the file, so ablating it empties it.
+    assert (out_dir / "ablation-variants" / "minus-framework-rules.md").read_text(
+        encoding="utf-8"
+    ) == ""
+
+    rows = _rows(project_root, "A")
+    # current + empty + 3 minus-variants, one task, one repeat
+    assert len(rows) == 5
+    assert {r["variant"] for r in rows} == {
+        "current", "empty", "minus-filing", "minus-framework-rules", "minus-ghost-section",
+    }
+
+    report = (out_dir / "ablation.md").read_text(encoding="utf-8")
+    assert "# Gauntlet Section Ablation" in report
+    assert "Ghost Section" in report and "Filing" in report
+
+
+def test_ablate_max_depth_limits_the_grid(fake_framework, tmp_path, monkeypatch):
+    project_root = _project_with_one_task(tmp_path, monkeypatch, fake_framework)
+    assert cli.main(["ablate", "--label", "D", "--max-depth", "1", "--yes"]) == 0
+    written = sorted(
+        p.name for p in (project_root / "data" / "runs" / "D" / "ablation-variants").iterdir()
+    )
+    assert written == ["minus-framework-rules.md"]
+
+
+def test_ablate_asks_before_a_large_grid_and_aborts_without_a_yes(
+    fake_framework, tmp_path, monkeypatch, capsys
+):
+    # No stdin under pytest, so the prompt reads EOF, which must be a refusal
+    # rather than an accident that spends money.
+    project_root = _project_with_one_task(tmp_path, monkeypatch, fake_framework)
+    assert cli.main(["ablate", "--label", "T", "--threshold", "1"]) == 1
+    out = capsys.readouterr().out
+    assert "5 cells" in out and "threshold" in out and "aborted" in out
+    assert not (project_root / "data" / "runs" / "T" / "results.jsonl").exists()
+
+
+def test_ablate_needs_a_snapshot(fake_framework, tmp_path, monkeypatch, capsys):
+    project_root = tmp_path / "gauntlet-project"
+    (project_root / "tasks").mkdir(parents=True)
+    monkeypatch.setattr(cli, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(cli, "load_project_config", lambda: fake_cfg(fake_framework))
+    monkeypatch.setattr(cli.tempfile, "gettempdir", lambda: str(tmp_path / "systemp"))
+    assert cli.main(["ablate", "--label", "N"]) == 1
+    assert "run `snapshot` first" in capsys.readouterr().out

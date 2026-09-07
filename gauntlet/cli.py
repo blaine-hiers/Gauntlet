@@ -13,7 +13,13 @@ from pathlib import Path
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from gauntlet.config import Config, load_config
+from gauntlet.ablate import (
+    build_ablation_report,
+    remove_section,
+    split_sections,
+    variant_name,
+)
+from gauntlet.config import Config, Variant, load_config
 from gauntlet.judge import judge_output
 from gauntlet.lint import lint_claude_md
 from gauntlet.providers import DEFAULT_PROVIDER_NAME, resolve_providers
@@ -277,6 +283,96 @@ def cmd_run(
     return 0
 
 
+def cmd_ablate(
+    cfg: Config,
+    label: str,
+    tasks_dir: Path,
+    repeats: int = 1,
+    concurrency: int = 1,
+    max_depth: int = 2,
+    threshold: int = 60,
+    assume_yes: bool = False,
+    legacy_model: str | None = None,
+    retry_errors: bool = False,
+    judge_samples: int = 1,
+) -> int:
+    """Generate one variant per removable section, run the grid, report the deltas."""
+    snap = data_root(cfg) / "snapshot"
+    claude_md = snap / "CLAUDE.md"
+    if not claude_md.is_file():
+        print(f"no CLAUDE.md in the snapshot at {snap} — run `snapshot` first")
+        return 1
+    if not tasks_dir.is_dir():
+        print(f"tasks directory not found: {tasks_dir}")
+        return 1
+
+    text = claude_md.read_text(encoding="utf-8")
+    sections = split_sections(text, max_depth=max_depth)
+    if not sections:
+        print(f"no headings at depth <= {max_depth} in the snapshot's CLAUDE.md")
+        return 1
+    tasks = load_tasks(tasks_dir)
+    if not tasks:
+        print(f"no tasks found in {tasks_dir}")
+        return 1
+
+    out_dir = data_root(cfg) / "runs" / label
+    variant_dir = out_dir / "ablation-variants"
+    variant_dir.mkdir(parents=True, exist_ok=True)
+
+    # `current` is the baseline every delta is measured against; `empty` is kept
+    # because the floor is the single most informative comparison in the report
+    # and it costs one variant among many.
+    variants = [Variant("current", None), Variant("empty", "")]
+    for section in sections:
+        path = variant_dir / f"{variant_name(section)}.md"
+        path.write_text(remove_section(text, section), encoding="utf-8")
+        # Absolute, because these are generated under data/ rather than checked
+        # in beside the project's own variants.
+        variants.append(Variant(variant_name(section), str(path)))
+
+    planned = len(variants) * len(tasks) * repeats
+    print(
+        f"{len(sections)} section(s) at depth <= {max_depth}: "
+        f"{len(variants)} variants × {len(tasks)} tasks × {repeats} repeat(s) "
+        f"= {planned} cells"
+    )
+    # sections × variants × tasks × repeats grows fast, and every cell is a paid
+    # model call. Make the size a decision rather than a surprise.
+    if planned > threshold and not assume_yes:
+        try:
+            answer = input(f"that is over the {threshold}-cell threshold. continue? [y/N] ")
+        except (EOFError, OSError):
+            # No usable stdin: a cron job, a CI runner, a detached process. The
+            # only safe reading of "nobody can answer" is no, because the
+            # alternative spends money on a grid nobody sized.
+            answer = ""
+        if answer.strip().lower() not in ("y", "yes"):
+            print("aborted")
+            return 1
+
+    rc = cmd_run(
+        dataclasses.replace(cfg, variants=variants),
+        label, None, tasks_dir,
+        repeats=repeats, legacy_model=legacy_model, retry_errors=retry_errors,
+        judge_samples=judge_samples, concurrency=concurrency,
+    )
+    if rc:
+        return rc
+
+    results_path = out_dir / "results.jsonl"
+    results = [json.loads(line) for line in results_path.read_text(encoding="utf-8").splitlines()]
+    for row in results:
+        row.setdefault("model", cfg.model)
+    md = build_ablation_report(
+        results, sections, lint_claude_md(text, snap), run_label=label
+    )
+    report_path = out_dir / "ablation.md"
+    report_path.write_text(md, encoding="utf-8")
+    print(f"ablation -> {report_path}")
+    return 0
+
+
 def cmd_compare(cfg: Config, labels: list[str], out_name: str) -> int:
     rows = []
     for label in labels:
@@ -353,6 +449,25 @@ def main(argv: list[str] | None = None) -> int:
         "--concurrency", type=int, default=1,
         help="cells to run at once across the task × variant × repeat grid (default 1, serial)",
     )
+    p_ablate = sub.add_parser("ablate")
+    p_ablate.add_argument("--label", required=True)
+    p_ablate.add_argument("--tasks-dir")
+    p_ablate.add_argument("--model")
+    p_ablate.add_argument("--repeats", type=int, default=1)
+    p_ablate.add_argument("--concurrency", type=int, default=1)
+    p_ablate.add_argument(
+        "--max-depth", type=int, default=2,
+        help="deepest heading level offered for ablation (default 2, so # and ##)",
+    )
+    p_ablate.add_argument(
+        "--threshold", type=int, default=60,
+        help="planned cell count above which the run asks for confirmation",
+    )
+    p_ablate.add_argument(
+        "--yes", action="store_true", help="skip the cost confirmation",
+    )
+    p_ablate.add_argument("--retry-errors", action="store_true")
+    p_ablate.add_argument("--judge-samples", type=int, default=1)
     p_report = sub.add_parser("report")
     p_report.add_argument("--label", required=True)
     p_compare = sub.add_parser("compare")
@@ -374,6 +489,18 @@ def main(argv: list[str] | None = None) -> int:
             cfg, args.label, args.variants, tasks_dir,
             repeats=args.repeats, legacy_model=default_model, retry_errors=args.retry_errors,
             judge_samples=args.judge_samples, concurrency=args.concurrency,
+        )
+    if args.command == "ablate":
+        tasks_dir = Path(args.tasks_dir) if args.tasks_dir else PROJECT_ROOT / "tasks"
+        default_model = cfg.model
+        if args.model:
+            cfg = dataclasses.replace(cfg, model=args.model)
+        return cmd_ablate(
+            cfg, args.label, tasks_dir,
+            repeats=args.repeats, concurrency=args.concurrency,
+            max_depth=args.max_depth, threshold=args.threshold, assume_yes=args.yes,
+            legacy_model=default_model, retry_errors=args.retry_errors,
+            judge_samples=args.judge_samples,
         )
     if args.command == "report":
         return cmd_report(cfg, args.label)
