@@ -30,7 +30,7 @@ flowchart TD
     V["CLAUDE.md variant<br/>(current / empty / trimmed / ...)"]:::stage
     T["golden task<br/>(tasks/*.yaml)"]:::stage
     P["prepare_run_dir<br/>(snapshot copy + variant swap)"]:::stage
-    E["provider.run<br/>(ClaudeCliProvider.execute)"]:::stage
+    E["provider.run<br/>(AgentProvider protocol)"]:::stage
 
     V --> P
     T --> P
