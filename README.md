@@ -1,8 +1,11 @@
 # Gauntlet
 
-A benchmark harness that answers one question about a context file:
+A benchmark harness that answers one question about a context file: is this
+`CLAUDE.md` earning its tokens, or is it just long?
 
-> **Is this CLAUDE.md earning its tokens, or is it just long?**
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
+[![CI](https://github.com/blaine-hiers/Gauntlet/actions/workflows/ci.yml/badge.svg)](https://github.com/blaine-hiers/Gauntlet/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Teams accumulate context files the way codebases accumulate config. A section
 gets added after a bad answer and never removed, and nobody can say which parts
@@ -11,6 +14,73 @@ corpus, swap the context file, run the same golden tasks, compare the scores.
 
 A worked example ships with it, so the harness runs end to end on a clean clone
 with nothing but `pip install`.
+
+## How a run scores one task
+
+Each golden task runs once per `CLAUDE.md` variant (`current`, `empty`, and
+anything else configured), and its output is scored through two independent
+gates that combine into one composite:
+
+```mermaid
+flowchart TD
+    classDef stage fill:#e8f0fe,stroke:#4285f4,color:#1a1a1a
+    classDef gate fill:#fef7e0,stroke:#f9ab00,color:#1a1a1a
+    classDef result fill:#e6f4ea,stroke:#34a853,color:#1a1a1a
+
+    V["CLAUDE.md variant<br/>(current / empty / trimmed / ...)"]:::stage
+    T["golden task<br/>(tasks/*.yaml)"]:::stage
+    P["prepare_run_dir<br/>(snapshot copy + variant swap)"]:::stage
+    E["provider.run<br/>(AgentProvider protocol)"]:::stage
+
+    V --> P
+    T --> P
+    P --> E
+
+    E --> D["run_checks<br/>(deterministic)"]:::gate
+    E --> J["judge_output<br/>(LLM judge: rubric + answer_key)"]:::gate
+
+    D --> S["_task_score<br/>(mean of check pass-rate and judge/10)"]:::result
+    J --> S
+
+    S --> R["build_report / build_compare<br/>(markdown: summary, matrix, verdicts)"]:::result
+```
+
+The deterministic gate (`gauntlet/scoring.py`) and the LLM judge
+(`gauntlet/judge.py`) run independently — a task can carry either one or both,
+and `_task_score` in `gauntlet/report.py` blends whichever components exist
+rather than letting a clean check pass mask a bad judge score (see
+[The scoring had a defect](#the-scoring-had-a-defect-and-it-is-still-documented-in-the-source)).
+
+### Deterministic check types
+
+| Type | Targets `$response`? | Passes when |
+|---|---|---|
+| `file_exists` | no | the file exists |
+| `file_not_exists` | no | the file does not exist |
+| `file_contains` | yes | the file (or the model's answer) contains the given text |
+| `file_not_contains` | yes | it does not contain the given text |
+| `file_matches` | yes | the file (or answer) matches the given regex |
+| `file_unchanged` | no | the file's hash still matches the frozen snapshot |
+| `snapshot_unchanged` | n/a | nothing in the whole run directory drifted from the snapshot, apart from an `allow`-listed set of paths |
+
+`$response` targets the model's own answer text instead of a file on disk.
+It is rejected at task-load time for `file_exists`, `file_not_exists` and
+`file_unchanged` (enforced in `gauntlet/tasks.py`): asking whether the
+model's answer exists on disk is a question with no honest answer.
+
+## Quickstart
+
+```bash
+pip install -r requirements.txt
+
+python -m gauntlet.cli snapshot              # freeze the corpus
+python -m gauntlet.cli run --label baseline  # every task, every variant
+python -m gauntlet.cli report --label baseline  # scored markdown report
+```
+
+`gauntlet.config.json` ships pointed at the bundled demo corpus, so a clean
+clone runs end to end with no setup. Point `synced_root` at a real knowledge
+base for real numbers.
 
 ## The design decisions that matter
 
@@ -30,20 +100,14 @@ whether it complies, and they are not the same number.
 ### Every task carries two independent gates
 
 **Deterministic checks** run after the model finishes, against the filesystem
-and, via `path: "$response"`, against the model's own answer: `file_exists`,
-`file_not_exists`, `file_contains`, `file_not_contains`, `file_matches`,
-`file_unchanged`, `snapshot_unchanged`. These cannot be argued with by anyone,
-including the judge.
+and, via `path: "$response"`, against the model's own answer — see the table
+above. These cannot be argued with by anyone, including the judge.
 
 The negative ones earn their keep. `file_unchanged` hashes a path before and
 after, so a read-only task proves it stayed read-only rather than reporting
 that it did. `snapshot_unchanged` widens that to the entire run directory and
 names every path that drifted, which measures blast radius instead of trusting
 that nothing else was touched.
-
-`$response` is rejected for `file_exists`, `file_not_exists` and
-`file_unchanged`: asking whether the model's answer exists on disk is a
-question with no honest answer.
 
 **An LLM judge** scores 0 to 10 against a rubric *and an answer key*. The rubric
 names the specific traps, so a plausible-sounding wrong answer scores badly
@@ -174,7 +238,7 @@ A markdown report in three parts:
 Each report also records the provenance of the snapshot it scored, so a number
 can be traced back to the corpus that produced it.
 
-## Running it
+## Running it — full command reference
 
 ```bash
 pip install -r requirements.txt
@@ -202,13 +266,13 @@ The serial path is kept deliberately separate from the pool: at `--concurrency 1
 a failing cell stops the run instead of paying for every cell already queued
 behind it.
 
-`run` also takes `--variants`, `--tasks-dir`, `--model` to override the
-configured model for one run, `--judge-samples` to median several judge calls
-per row, and `--retry-errors`.
-
-`gauntlet.config.json` ships pointed at the bundled demo corpus, so a clean
-clone runs end to end with no setup. Point `synced_root` at a real knowledge
-base for real numbers.
+| Flag | Does |
+|---|---|
+| `--variants` | restrict a run to a subset of configured variants |
+| `--tasks-dir` | point at a different golden-task directory |
+| `--model` | override the configured model for one run |
+| `--judge-samples` | median several judge calls per row |
+| `--retry-errors` | re-run cells that previously errored |
 
 Re-run under a new label whenever a model ships or the context file changes
 materially, then `compare`. That is the workflow the harness exists for.
@@ -305,6 +369,8 @@ tests/          unit tests
 ```
 
 `tasks/README.md` covers task authoring in full.
+
+## Testing
 
 ```bash
 python -m pytest
